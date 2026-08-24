@@ -41,7 +41,7 @@ throws away the M0's door and dispense-completion logic.
     unknown, then four raw 16-bit fields (the first pair reads ~0 on battery,
     the second stays non-zero; units/scaling **unconfirmed**).
   - `0x07`/`0x09` open/close door, payload = **single byte `0x1E`** (stock).
-  - `0x0B` dispense, payload `00 02 01 50` for the stock repeated portion.
+  - `0x0B` dispense, payload `00 02 01 50` for the stock repeated step.
   - `0x0E` blink LED / beep, payload `subcmd, on_ms(2), off_ms(2), count(2)`.
   - `0x13/0x03/0x05/0x04/0x06/0x0D` — parameter packets replayed at boot in the
     captured order; the component waits for the M0's ack between each.
@@ -93,9 +93,9 @@ Verified: `esphome config` passes and the firmware compiles for `esp8266`
 
 ## What you get in Home Assistant
 
-- **Buttons:** Feed now (× *Feed portions*), Dispense 1 portion, Open door,
+- **Buttons:** Feed now (× *Dispense steps*), Dispense 1 step, Open door,
   Close door, Beep, Refresh status, Reset motor controller.
-- **Number:** Feed portions (each = one dispense command).
+- **Number:** Dispense steps (raw, uncalibrated — one step = one motor command).
 - **Binary sensors:** Food level (byte0), Door status flag (byte1), Manual feed
   button, Wi-Fi button.
 - **Diagnostics:** four raw status fields (see caveats — units unconfirmed).
@@ -105,13 +105,18 @@ which is the whole point.
 
 ## Calibration / caveats — READ THIS
 
-Framing and CRC are proven from both firmwares and the captures. **Command
+Framing is proven from both firmwares; the CRC is proven from the captures and
+the M0 firmware (the ESP8266's CRC routine was not located). **Command
 semantics are only partly verified, and nothing here has run on a physical
 feeder.** Validate before trusting anything that moves the door or dispenses.
 The full grounded-vs-assumed audit is in `../AGENTS.md`. Highlights:
 
-- One "portion" = one stock dispense command (`00 02 01 50`, captured). The
-  relationship between commands and actual food quantity is **not** established.
+- A "dispense step" = one captured stock dispense command (`00 02 01 50`). The
+  relationship between steps and actual food quantity is **not** established —
+  captures show the stock feed is a longer transaction (a `FF 01 01 50` /
+  `01 01 01 50` lead-in, then repeated `00 02 01 50` steps that get immediate
+  zero-filled completions), so a step is likely an incremental motor move, not
+  a portion. Treat "Dispense steps" as a raw, uncalibrated control.
 - The four status fields are exposed **raw, without units**. Only the
   adapter-vs-battery grouping is evidenced (first pair → ~0 on battery); the
   "ADC vs mV" split and absolute scaling are guesses — calibrate against a meter.

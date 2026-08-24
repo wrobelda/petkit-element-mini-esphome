@@ -41,14 +41,20 @@ external-ESP32 approach that bypasses the M0 and re-drives the motor.
      validates the captured packets.
 4. **ESP8266 (Xtensa LX106) disassembly** — Espressif `xtensa-lx106-elf-objdump`
    over `irom0.text` mapped at `0x40200000` (found via the `0xAA` opcode
-   signature, NOT a string):
+   signature, NOT a string). This confirms **framing only**, not CRC:
    - Frame parser @ `0x40253d90`: `bgeui a4,7` (need ≥7 bytes); `movi a2,170` +
-     `beq` ×2 (`0x40253df7`/`0x40253e29`) = `AA AA` header; `l8ui` length at
-     `+2`; `addi -7` + `bgeu 12` = bounds **7..19**; then a 500-byte ring-buffer
-     split copy of `length` bytes. Confirms the exact `OVERHEAD=7`/`MAX_FRAME=19`
-     used in `petkit_protocol.h`.
-   - The M0 bus is on **UART0**: the UART1 MMIO base `0x60000F00` is never
-     referenced; `0x60000000` (UART0) is referenced 20×.
+     `beq` ×2 (`0x40253df7`/`0x40253e29`) = `AA AA` header; `addi +2` + `l8ui` =
+     length byte; `movi 12` + `bgeu` = bounds **7..19**; then a 500-byte
+     ring-buffer split copy. Confirms the `OVERHEAD=7`/`MAX_FRAME=19` used in
+     `petkit_protocol.h`.
+   - This routine is the **feeder** command parser (not MQTT): it references
+     `_DOOR_OPEN` and `motor open:...%d` strings via `l32r`.
+   - **CRC scope:** the ESP8266's own CRC routine was **not** located, so CRC is
+     proven from the captures and the M0 firmware only — *not* from both
+     disassemblies. Do not state "CRC proven from both firmwares."
+   - UART0 vs UART1: the firmware references `0x60000000` (UART0) and never
+     `0x60000F00` (UART1), consistent with the bus being on UART0 per the
+     wiring/captures — but that count alone does not prove this parser reads it.
 
 **CORRECTION to an earlier claim:** the string `decodePacket error,rc = %d` is
 in the bundled Aliyun **MQTT** code (it sits between `mqtt read error` and
@@ -67,8 +73,8 @@ Framing/CRC are proven. Command *semantics* are only as good as the evidence:
 | Item | Status | Basis |
 |------|--------|-------|
 | Door cmd 0x07/0x09 payload = single byte `0x1E` | **grounded** | every captured stock door cmd is `AA AA 08 07/09 <seq> 1E <crc>` |
-| Dispense 0x0B repeated payload `00 02 01 50` | **grounded** | captured stock dispense stream |
-| Dispense pacing ~1 s, wait for `0x0C` completion | **grounded** | captured timing (~1.0 s apart, each acked/completed) |
+| Dispense 0x0B repeated command `00 02 01 50` exists | **grounded** | captured stock dispense stream |
+| Dispense pacing: wait for the seq-matched `0x0C` completion | **grounded** | captured timing; each command's completion echoes its seq |
 | Boot config packets 0x13,0x03,0x05,0x04,0x06,0x0D + payloads/order | **grounded** | captured factory boot; M0 acks each (same-type, len 8, `01`) |
 | Not sending 0x11 at boot | **grounded** | 0x11 appears only in the earlynerd *test script*, not stock boot |
 | 0x0E blink/beep payload = subcmd,on,off,count | **grounded** | boot-log 0x0E frames match this layout |
@@ -78,26 +84,42 @@ Framing/CRC are proven. Command *semantics* are only as good as the evidence:
 | status byte1 meaning ("door fault") | **contradicted** | idle AC-powered boots show `0x01` constantly — not a fault; exposed as neutral flag |
 | status 4×16-bit fields: adapter-vs-battery grouping | weak evidence | adapter pair reads ~0 on battery; ADC/mV/units/scale UNVERIFIED (exposed raw, no units) |
 | reset_pin GPIO15 active-high (low = run) | reasoned, unverified | ESP boot needs GPIO15 low AND M0 runs from power-on ⇒ low=run; left commented out in YAML |
-| "1 portion = 1 dispense command" | assumed | relationship of commands to food quantity not established |
+| "1 dispense step = a food portion" | **contradicted/unproven** | stock feed is a longer transaction (`FF 01 01 50` / `01 01 01 50` lead-in, then repeated `00 02 01 50` steps with *immediate zero-filled* completions, vs a later *non-zero* completion for the lead-in) — so `00 02 01 50` is likely an incremental motor step/probe, not a portion. UI now labels it "Dispense steps (raw)". |
 
 **Nothing here has run on the physical feeder.** The command layer needs
 hardware validation before trusting it — especially anything that moves the
 door or dispenses.
 
-## Review fixes applied (from Codex Sol review)
+## Review fixes applied (from Codex Sol reviews)
+Round 1:
 - Door payload corrected to single byte `0x1E` (was a wrong 2-byte `dur,str`).
 - Dispense payload corrected to `00 02 01 50` (was `03 01 00 10`, which matched
   no capture — it came from the test script).
-- Dispense now a **paced queue**: one command at a time, waiting for the `0x0C`
-  completion (or timeout), not a back-to-back flood.
-- RX rewritten as a proper state machine that resyncs correctly (a stray `0xAA`
-  before a real frame no longer swallows it).
-- Boot handshake now **reactive** (advance on the M0's ack), and the unsupported
-  "M0 tolerates the simplified form" claim was removed.
-- Status decoding de-overclaimed: neutral names, no fake mV units, no `problem`
-  class on the contradicted door byte.
-- `reboot_timeout: 0s` so a Wi-Fi outage never power-cycles the feeder.
-- Length bounds aligned to the real receiver ([7,19]); `MAX_FRAME=19`.
+- Dispense paced (one at a time), RX rewritten as a state machine, boot
+  handshake made reactive (advance on the M0's ack), status decoding
+  de-overclaimed, `reboot_timeout: 0s`, length bounds `[7,19]`.
+
+Round 2:
+- **"Portion" overclaim removed:** `feed()` counts raw *dispense steps*, not
+  food portions; the number entity is "Dispense steps (raw, uncalibrated)".
+- **Dispense queue is a real ring buffer** (`PayloadQueue`, `petkit_framer.h`):
+  distinct raw commands enqueued back-to-back are now sent in order, each with
+  its own payload (was a single shared slot — every entry used the newest).
+- **Completions matched by sequence number:** only the `0x0C` whose seq equals
+  the in-flight dispense's seq releases the queue, so a late completion from a
+  timed-out command can't release the next one early. Timeout raised to 4 s.
+- **RX + queue extracted to `petkit_framer.h`** (dependency-free) and unit
+  tested (`test_framer.cpp`): resync, split frames, FIFO order, capacity.
+- **`reset_mcu()` clears `init_waiting_ack_`/`init_deadline_`** (stale handshake
+  state) plus the queue and assembler.
+- **Verifier/README overclaims tightened:** the ESP8266 disassembly proves
+  *framing* only (CRC routine not located → CRC from captures + M0 only); the
+  extra parser opcodes (both `beq`, `addi +2`, `movi 12`, `bgeu`) are now
+  asserted, and the parser's feeder-string `l32r`s (`_DOOR_OPEN`, `motor open`)
+  are checked to tie it to feeder command handling.
+
+Still open (needs hardware): the step→food-quantity mapping, whether the boot
+config packets are required, status field polarities/units, `reset_pin` polarity.
 
 ## ESP8266 GPIO map
 | GPIO | Function | Used |
@@ -111,9 +133,9 @@ door or dispenses.
 | 16 | deep-sleep wake | unused |
 
 ## Deliverable & tests
-- `esphome/components/petkit_feeder/` — `petkit_protocol.h` (pure framing/CRC,
-  shared by firmware and tests), `petkit_feeder.{h,cpp}` (bus master),
-  `__init__.py` (codegen).
+- `esphome/components/petkit_feeder/` — `petkit_protocol.h` (pure framing/CRC),
+  `petkit_framer.h` (pure RX assembler + dispense ring buffer), both shared by
+  firmware and tests; `petkit_feeder.{h,cpp}` (bus master); `__init__.py`.
 - `esphome/petkit-feeder.yaml`, `esphome/README.md`.
 - `esphome/tests/` (`./run_tests.sh`): `test_protocol.cpp` (native C++ on the
   shipping code, vectors = captured frames), `test_captures.py` (capture
