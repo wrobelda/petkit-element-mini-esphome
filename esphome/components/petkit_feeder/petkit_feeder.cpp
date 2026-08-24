@@ -6,10 +6,15 @@ namespace petkit_feeder {
 
 static const char *const TAG = "petkit_feeder";
 
-// Stock boot handshake the original firmware sends to the M0 before it starts
-// polling status. Values are lifted verbatim from a logic-analyzer capture of
-// the factory firmware boot (see the petkit-serial-bus README). They configure
-// motor timing/thresholds; replaying them keeps the M0 in its expected state.
+// The parameter packets the stock firmware sends to the M0 at boot, in the
+// exact type order and with the exact payloads seen in a captured factory boot
+// (README "Boot up Sequence"): 0x13, 0x03, 0x05, 0x04, 0x06, 0x0D. The M0 acks
+// each with a same-type, len-8, payload-0x01 frame; we advance on that ack (or
+// a timeout). Two divergences from stock, both deliberate and unverified on
+// hardware: (1) stock re-sends 0x0D a second time — we send it once; (2) stock
+// then sends five 0x0E LED/beep packets (startup light/beep animation) which we
+// omit to avoid beeping on every boot. Whether every packet here is REQUIRED
+// for the M0 to accept feed/door commands is not established without hardware.
 struct InitPacket {
   uint8_t type;
   uint8_t len;
@@ -24,7 +29,8 @@ static const InitPacket INIT_SEQ[] = {
     {PKT_CONFIG13, 12, {0x00, 0x3C, 0x01, 0x90, 0x0F, 0x01, 0x22, 0x22, 0x01, 0xF4, 0x0F, 0x01}},
 };
 static const uint8_t INIT_SEQ_COUNT = sizeof(INIT_SEQ) / sizeof(INIT_SEQ[0]);
-static const uint32_t INIT_STEP_MS = 150;
+static const uint32_t INIT_ACK_TIMEOUT_MS = 300;  // wait this long for an ack
+static const uint32_t INIT_GAP_MS = 20;           // gap after an ack before next
 
 void PetkitFeeder::setup() {
   if (this->reset_pin_ != nullptr) {
@@ -45,47 +51,87 @@ void PetkitFeeder::send_packet_(uint8_t type, const uint8_t *payload, uint8_t pa
   ESP_LOGV(TAG, "TX type=0x%02X seq=%u len=%u", type, frame[4], len);
 }
 
+uint8_t PetkitFeeder::init_seq_len_() const { return INIT_SEQ_COUNT; }
+
 void PetkitFeeder::loop() {
   const uint32_t now = millis();
 
-  // Advance the boot handshake.
-  if (this->init_step_ < INIT_SEQ_COUNT && now >= this->init_next_ms_) {
-    const InitPacket &p = INIT_SEQ[this->init_step_];
-    this->send_packet_(p.type, p.payload, p.len);
-    this->init_step_++;
-    this->init_next_ms_ = now + INIT_STEP_MS;
-  }
-
-  // Byte-wise frame assembler. Frames start with AA AA; rx_buf_[2] is length.
-  while (this->available()) {
-    uint8_t c;
-    this->read_byte(&c);
-    this->last_byte_ms_ = now;
-
-    if (this->rx_len_ == 0) {
-      if (c == 0xAA)
-        this->rx_buf_[this->rx_len_++] = c;  // first header byte
-    } else if (this->rx_len_ == 1) {
-      if (c == 0xAA)
-        this->rx_buf_[this->rx_len_++] = c;  // second header byte -> len next
-      // else: not a real header, stay at rx_len_==1 waiting for the pair
-    } else {
-      this->rx_buf_[this->rx_len_++] = c;
-      const uint8_t expect = this->rx_buf_[2];
-      if (expect < 7 || expect > sizeof(this->rx_buf_)) {  // bogus length -> resync
-        this->rx_len_ = 0;
-        continue;
-      }
-      if (this->rx_len_ == expect) {
-        this->handle_frame_(this->rx_buf_, expect);
-        this->rx_len_ = 0;
-      }
+  // Advance the boot handshake: send a packet, then wait for the M0's ack
+  // (handled in handle_frame_) before the next, with a timeout fallback.
+  if (this->init_step_ < INIT_SEQ_COUNT) {
+    if (!this->init_waiting_ack_ && now >= this->init_next_ms_) {
+      const InitPacket &p = INIT_SEQ[this->init_step_];
+      this->send_packet_(p.type, p.payload, p.len);
+      this->init_waiting_ack_ = true;
+      this->init_deadline_ = now + INIT_ACK_TIMEOUT_MS;
+    } else if (this->init_waiting_ack_ && now >= this->init_deadline_) {
+      ESP_LOGW(TAG, "No ack for init step %u (type 0x%02X); continuing", this->init_step_,
+               INIT_SEQ[this->init_step_].type);
+      this->init_step_++;
+      this->init_waiting_ack_ = false;
+      this->init_next_ms_ = now + INIT_GAP_MS;
     }
   }
 
+  while (this->available()) {
+    uint8_t c;
+    this->read_byte(&c);
+    this->feed_byte_(c, now);
+  }
+
   // Drop a partial frame if the bus goes quiet mid-frame.
-  if (this->rx_len_ > 0 && (now - this->last_byte_ms_) > 50)
-    this->rx_len_ = 0;
+  if (this->rx_state_ != RX_SYNC && (now - this->last_byte_ms_) > 50) {
+    this->rx_state_ = RX_SYNC;
+    this->rx_aa_ = 0;
+  }
+
+  // Pace queued dispense commands (only once init has completed).
+  if (this->ready_())
+    this->service_dispense_queue_(now);
+}
+
+// RX state machine: sync on two consecutive 0xAA, then a length byte, then
+// len-3 body bytes. Resync reconsiders the current byte as a possible header
+// start, so a stray 0xAA before a real frame cannot swallow it.
+void PetkitFeeder::feed_byte_(uint8_t c, uint32_t now) {
+  this->last_byte_ms_ = now;
+  switch (this->rx_state_) {
+    case RX_SYNC:
+      if (c == 0xAA) {
+        if (this->rx_aa_ < 2)
+          this->rx_aa_++;
+        if (this->rx_aa_ >= 2)
+          this->rx_state_ = RX_LEN;
+      } else {
+        this->rx_aa_ = 0;
+      }
+      break;
+    case RX_LEN:
+      if (c == 0xAA) {
+        // Another 0xAA: still a valid header pair, keep waiting for a length.
+        break;
+      }
+      if (c >= protocol::OVERHEAD && c <= protocol::MAX_FRAME) {
+        this->rx_buf_[0] = 0xAA;
+        this->rx_buf_[1] = 0xAA;
+        this->rx_buf_[2] = c;
+        this->rx_len_ = 3;
+        this->rx_need_ = c;
+        this->rx_state_ = RX_BODY;
+      } else {
+        this->rx_state_ = RX_SYNC;  // bogus length; drop and resync
+        this->rx_aa_ = 0;
+      }
+      break;
+    case RX_BODY:
+      this->rx_buf_[this->rx_len_++] = c;
+      if (this->rx_len_ >= this->rx_need_) {
+        this->handle_frame_(this->rx_buf_, this->rx_need_);
+        this->rx_state_ = RX_SYNC;
+        this->rx_aa_ = 0;
+      }
+      break;
+  }
 }
 
 void PetkitFeeder::handle_frame_(const uint8_t *frame, uint8_t len) {
@@ -95,29 +141,46 @@ void PetkitFeeder::handle_frame_(const uint8_t *frame, uint8_t len) {
   }
   const uint8_t type = frame[3];
   const uint8_t seq = frame[4];
+  const uint8_t *payload = &frame[5];
+  const uint8_t payload_len = len - protocol::OVERHEAD;
+
+  // Boot handshake: advance when the M0 acks the packet we are waiting on.
+  if (this->init_waiting_ack_ && this->init_step_ < INIT_SEQ_COUNT &&
+      type == INIT_SEQ[this->init_step_].type && len == 8 && payload[0] == 0x01) {
+    this->init_step_++;
+    this->init_waiting_ack_ = false;
+    this->init_next_ms_ = millis() + INIT_GAP_MS;
+    return;
+  }
 
   switch (type) {
     case PKT_STATUS: {
-      // Payload: food(1) door(1) unk(1) adapterAdc(2) adapterMv(2) battAdc(2) battMv(2)
+      // Payload layout (offsets confirmed against captures):
+      //   [0] food byte, [1] door byte, [2] unknown (always 0x01 seen),
+      //   [3:4],[5:6] = "adapter" pair (both ~0 when running on battery),
+      //   [7:8],[9:10] = "battery/system" pair (always non-zero).
+      // Only the adapter-vs-battery GROUPING is evidence-based; the ADC/mV
+      // distinction, units and absolute scaling are NOT confirmed.
       protocol::Status st = protocol::parse_status(frame, len);
       if (this->food_ok_ != nullptr)
-        this->food_ok_->publish_state(st.food_ok);        // 0x01 = ok, 0x00 = low
-      if (this->door_fault_ != nullptr)
-        this->door_fault_->publish_state(st.door_fault);  // 0x01 = not fully open/closed
-      if ((len - protocol::OVERHEAD) >= 11) {
-        if (this->adapter_adc_ != nullptr)
-          this->adapter_adc_->publish_state(st.adapter_adc);
-        if (this->adapter_mv_ != nullptr)
-          this->adapter_mv_->publish_state(st.adapter_mv);
-        if (this->battery_adc_ != nullptr)
-          this->battery_adc_->publish_state(st.battery_adc);
-        if (this->battery_mv_ != nullptr)
-          this->battery_mv_->publish_state(st.battery_mv);
+        this->food_ok_->publish_state(st.food_ok);          // polarity unverified (all captures 0x00)
+      if (this->door_flag_ != nullptr)
+        this->door_flag_->publish_state(st.door_fault);     // meaning of byte[1] unconfirmed
+      if (payload_len >= 11) {
+        if (this->adapter_a_ != nullptr)
+          this->adapter_a_->publish_state(st.adapter_adc);
+        if (this->adapter_b_ != nullptr)
+          this->adapter_b_->publish_state(st.adapter_mv);
+        if (this->battery_a_ != nullptr)
+          this->battery_a_->publish_state(st.battery_adc);
+        if (this->battery_b_ != nullptr)
+          this->battery_b_->publish_state(st.battery_mv);
       }
       break;
     }
     case PKT_DISPENSED:
       ESP_LOGI(TAG, "Dispense complete (seq=%u)", seq);
+      this->dispense_busy_ = false;  // release the queue for the next portion
       break;
     case PKT_DOOR_OPENED:
       ESP_LOGI(TAG, "Door open complete (seq=%u)", seq);
@@ -132,7 +195,7 @@ void PetkitFeeder::handle_frame_(const uint8_t *frame, uint8_t len) {
 }
 
 void PetkitFeeder::update() {
-  if (this->init_step_ < INIT_SEQ_COUNT)
+  if (!this->ready_())
     return;  // still handshaking
   this->get_status();
 }
@@ -141,29 +204,62 @@ void PetkitFeeder::update() {
 
 void PetkitFeeder::get_status() { this->send_packet_(PKT_GET_STATUS, nullptr, 0); }
 
+// Per-portion dispense payload as seen in captured stock traffic: the repeated
+// command is 00 02 01 50 (duration=0, distance=2, direction=1, current=0x50).
+static const uint8_t STOCK_DISPENSE[4] = {0x00, 0x02, 0x01, 0x50};
+// Timeout waiting for a 0x0C completion before we give up and send the next.
+static const uint32_t DISPENSE_TIMEOUT_MS = 1500;
+
+void PetkitFeeder::enqueue_dispense_(const uint8_t payload[4]) {
+  for (uint8_t i = 0; i < 4; i++)
+    this->dispense_pending_[i] = payload[i];
+  if (this->dispense_queue_ < 0xFFFF)
+    this->dispense_queue_++;
+}
+
+void PetkitFeeder::service_dispense_queue_(uint32_t now) {
+  if (this->dispense_busy_) {
+    if (static_cast<int32_t>(now - this->dispense_deadline_) < 0)
+      return;  // still waiting for completion
+    ESP_LOGW(TAG, "Dispense completion timed out; continuing queue");
+    this->dispense_busy_ = false;
+  }
+  if (this->dispense_queue_ == 0)
+    return;
+  this->dispense_queue_--;
+  this->send_packet_(PKT_DISPENSE, this->dispense_pending_, 4);
+  this->dispense_busy_ = true;
+  this->dispense_deadline_ = now + DISPENSE_TIMEOUT_MS;
+  ESP_LOGI(TAG, "Dispense sent (%u queued)", this->dispense_queue_);
+}
+
 void PetkitFeeder::dispense(uint8_t duration, uint8_t distance, uint8_t direction, uint8_t current) {
-  uint8_t p[4] = {duration, distance, direction, current};
-  this->send_packet_(PKT_DISPENSE, p, 4);
-  ESP_LOGI(TAG, "Dispense dur=%u dist=%u dir=%u cur=%u", duration, distance, direction, current);
+  const uint8_t p[4] = {duration, distance, direction, current};
+  this->enqueue_dispense_(p);
 }
 
 void PetkitFeeder::feed(uint8_t portions) {
-  // One "portion" mirrors the short dispense the stock firmware issues:
-  // duration=3, distance=1, direction=0, current=16 (0x10).
   if (portions == 0)
     portions = 1;
   for (uint8_t i = 0; i < portions; i++)
-    this->dispense(3, 1, 0, 16);
+    this->enqueue_dispense_(STOCK_DISPENSE);
+  ESP_LOGI(TAG, "Feed queued: %u portion(s)", portions);
 }
 
-void PetkitFeeder::open_door(uint8_t duration, uint8_t strength) {
-  uint8_t p[2] = {duration, strength};
-  this->send_packet_(PKT_OPEN_DOOR, p, 2);
+void PetkitFeeder::open_door(uint8_t param) {
+  if (!this->ready_()) {
+    ESP_LOGW(TAG, "open_door ignored: still initializing");
+    return;
+  }
+  this->send_packet_(PKT_OPEN_DOOR, &param, 1);
 }
 
-void PetkitFeeder::close_door(uint8_t duration, uint8_t strength) {
-  uint8_t p[2] = {duration, strength};
-  this->send_packet_(PKT_CLOSE_DOOR, p, 2);
+void PetkitFeeder::close_door(uint8_t param) {
+  if (!this->ready_()) {
+    ESP_LOGW(TAG, "close_door ignored: still initializing");
+    return;
+  }
+  this->send_packet_(PKT_CLOSE_DOOR, &param, 1);
 }
 
 void PetkitFeeder::blink_beep_(uint8_t subcommand, uint16_t on_ms, uint16_t off_ms, uint16_t count) {
@@ -193,6 +289,11 @@ void PetkitFeeder::reset_mcu() {
   this->reset_pin_->digital_write(true);
   delay(20);
   this->reset_pin_->digital_write(false);
+  // Drop any queued motion so nothing dispenses across a reset.
+  this->dispense_queue_ = 0;
+  this->dispense_busy_ = false;
+  this->rx_state_ = RX_SYNC;
+  this->rx_aa_ = 0;
   this->init_step_ = this->send_init_ ? 0 : INIT_SEQ_COUNT;
   this->init_next_ms_ = millis() + 500;
 }

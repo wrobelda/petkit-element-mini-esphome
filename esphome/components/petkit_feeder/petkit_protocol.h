@@ -20,7 +20,16 @@ namespace protocol {
 
 static const uint8_t HEADER_BYTE = 0xAA;
 static const uint8_t OVERHEAD = 7;  // 2 header + len + type + seq + 2 crc
-static const uint8_t MAX_FRAME = 32;
+
+// The ISD91230 receiver (disassembly @ 0x19C8/0x19D0) accepts a length byte in
+// [M0_MIN_LEN, M0_MAX_LEN] inclusive. Real traffic ranges from 7 (a zero-
+// payload command) to 19 (the 0x0D config / the 18-byte status is 0x12=18).
+// The M0's min of 6 is one below the documented 7-byte minimum frame; we never
+// emit a 6-byte frame. Our RX buffer/validator caps at M0_MAX_LEN so we model
+// the real receiver rather than accepting oversized frames.
+static const uint8_t M0_MIN_LEN = 6;
+static const uint8_t M0_MAX_LEN = 0x13;  // 19
+static const uint8_t MAX_FRAME = M0_MAX_LEN;
 
 inline uint16_t crc16_ccitt(const uint8_t *data, size_t len) {
   uint16_t crc = 0xFFFF;

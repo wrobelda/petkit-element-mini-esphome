@@ -54,8 +54,10 @@ ota:
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
-  # Critical for an "offline-first" appliance: if the AP is down, still run and
-  # still honor the physical manual-feed button and any HA on the fallback net.
+  # Offline-first appliance: never reboot just because Wi-Fi is down. ESPHome's
+  # default reboot_timeout (15 min) would power-cycle the feeder during an
+  # outage — exactly when it must keep honoring the manual-feed button.
+  reboot_timeout: 0s
   ap:
     ssid: "${friendly_name} Fallback"
 
@@ -73,25 +75,31 @@ uart:
 petkit_feeder:
   id: feeder
   uart_id: bus
-  reset_pin:
-    number: GPIO15
-    # Active-high reset: high pulses the M0 into reset, low runs it. Must stay
-    # low at boot for the ESP8266 to boot from flash, which matches "running".
-    inverted: false
+  # reset_pin drives GPIO15 = the ISD91230 reset line. Polarity (active-high,
+  # low = running) is REASONED from the ESP8266 boot strap requiring GPIO15 low
+  # while the M0 is observed running from power-on, but NOT verified on a meter.
+  # Getting it wrong holds the M0 in reset (feeder dead). Left commented out;
+  # enable only once you have confirmed the polarity on your unit.
+  # reset_pin:
+  #   number: GPIO15
+  #   inverted: false
   send_init_sequence: true
   update_interval: 10s
+  # Diagnostic status fields. Names reflect what is actually evidenced; the raw
+  # pairs have UNCONFIRMED units/scaling (see README). food/door byte meanings
+  # and polarity are from the earlynerd notes and not verified here.
   food_ok:
-    name: "Food level OK"
-  door_fault:
-    name: "Door fault"
-  adapter_adc:
-    name: "Adapter ADC"
-  adapter_millivolts:
-    name: "Adapter mV"
-  battery_adc:
-    name: "Battery ADC"
-  battery_millivolts:
-    name: "Battery mV"
+    name: "Food level (byte0 != 0)"
+  door_flag:
+    name: "Door status flag (byte1)"
+  adapter_raw_1:
+    name: "Adapter field 1 (raw)"
+  adapter_raw_2:
+    name: "Adapter field 2 (raw)"
+  battery_raw_1:
+    name: "Battery field 1 (raw)"
+  battery_raw_2:
+    name: "Battery field 2 (raw)"
 
 # --- Physical buttons on the feeder ---
 binary_sensor:
@@ -151,13 +159,14 @@ button:
     name: "Open door"
     entity_category: config
     on_press:
-      - lambda: 'id(feeder).open_door(10, 30);'
+      # Stock open-door command payload is a single byte 0x1E (the default).
+      - lambda: 'id(feeder).open_door();'
 
   - platform: template
     name: "Close door"
     entity_category: config
     on_press:
-      - lambda: 'id(feeder).close_door(10, 30);'
+      - lambda: 'id(feeder).close_door();'
 
   - platform: template
     name: "Beep"
