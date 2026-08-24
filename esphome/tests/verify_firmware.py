@@ -13,8 +13,11 @@ Espressif objdump for the ESP8266).
     0x36A8  CRC-16:    table-less CCITT, seed literal 0xFFFF @ 0x36E8
 
   ESP8266 (Xtensa LX106), petkitesp8266flash.bin, irom0 @ 0x40200000:
-    0x40253d90 receiver: bgeui a4,7 (min length), movi a2,170 + beq x2 (header),
-            l8ui length, addi -7 + bgeu 12 (bounds 7..19), ring-buffer copy
+    0x40253d90 FEEDER command parser (references _DOOR_OPEN / motor open via
+            l32r): bgeui a4,7 (min length), movi a2,170 + beq x2 (AA AA header),
+            addi +2 / l8ui (length byte), movi 12 + bgeu (bounds 7..19).
+            The ESP8266 CRC routine is NOT located here, so CRC is proven only
+            from the captures and the M0 firmware, not from both disassemblies.
 
 Run:  python3 verify_firmware.py
 """
@@ -88,21 +91,36 @@ def verify_esp():
     def foff(vma):
         return 0x1010 + (vma - 0x40200000)
 
-    # Frame parser opcodes (Xtensa bytes in file/little order).
+    # Frame parser opcodes (Xtensa bytes in file/little order). Asserting the
+    # full header/length logic, not just the movi constants (review-5).
     ins = {
         0x40253DD5: (b"\xf6\x74\x02", "bgeui a4,7 (require >=7 bytes)"),
         0x40253DF4: (b"\x22\xa0\xaa", "movi a2,170 (0xAA header byte 1)"),
+        0x40253DF7: (b"\x27\x13\x13", "beq a3,a2 (branch when byte1 == 0xAA)"),
         0x40253E26: (b"\x22\xa0\xaa", "movi a2,170 (0xAA header byte 2)"),
-        0x40253E5A: (b"\xc2\x02\x00", "l8ui a12,[len] (length byte at +2)"),
+        0x40253E29: (b"\x27\x13\x18", "beq a3,a2 (branch when byte2 == 0xAA)"),
+        0x40253E45: (b"\x2b\x2f", "addi.n a2,a15,2 (index -> length at offset +2)"),
+        0x40253E5A: (b"\xc2\x02\x00", "l8ui a12,[a2] (read the length byte)"),
+        0x40253E5D: (b"\x0c\xc3", "movi.n a3,12 (max payload)"),
         0x40253E5F: (b"\x22\xcc\xf9", "addi a2,a12,-7 (payload = length-7)"),
+        0x40253E65: (b"\x27\xb3\x12", "bgeu a3,a2 (require length-7 <= 12, i.e. len<=19)"),
     }
     for vma, (b, desc) in ins.items():
         fo = foff(vma)
         check(d[fo : fo + len(b)] == b, f"ESP @0x{vma:08X}: {desc}")
 
-    # The bus is on UART0: the UART1 MMIO base is never referenced as a literal.
-    check(d.count(struct.pack("<I", 0x60000F00)) == 0, "ESP references no UART1 MMIO (bus is UART0)")
-    check(d.count(struct.pack("<I", 0x60000000)) > 0, "ESP references UART0 MMIO")
+    # This routine (not the MQTT decoder) is the FEEDER command parser: it
+    # references feeder strings via l32r. Assert those strings exist at the VMAs
+    # the l32r targets point to (see the disassembly scan in the repo notes).
+    for vma, s in ((0x40202E79, b"_DOOR_OPEN"), (0x40202ED1, b"motor open:")):
+        fo = foff(vma)
+        check(d[fo : fo + len(s)] == s, f"parser references feeder string {s.decode()!r}")
+
+    # UART0 vs UART1: the firmware references UART0 MMIO and never UART1. This is
+    # consistent with the bus being on UART0 (per wiring/captures) but does NOT
+    # by itself prove this parser reads UART0 — noted, not overclaimed.
+    check(d.count(struct.pack("<I", 0x60000F00)) == 0, "no UART1 MMIO literal (bus is UART0 per wiring)")
+    check(d.count(struct.pack("<I", 0x60000000)) > 0, "UART0 MMIO is referenced")
 
     # Correction to an earlier claim: the 'decodePacket' string is MQTT (Aliyun
     # iotkit), NOT the UART decoder — assert it sits among the MQTT strings.
@@ -115,8 +133,15 @@ def main():
     verify_m0()
     verify_esp()
     print()
-    print("VERIFIED: framing bounds + CRC confirmed in both firmwares" if not fails
-          else f"{fails} CHECK(S) FAILED")
+    if fails:
+        print(f"{fails} CHECK(S) FAILED")
+    else:
+        # Precise about what each firmware proves: FRAMING is confirmed in both;
+        # CRC is confirmed from the captures and the M0 firmware only (the
+        # ESP8266's CRC routine was not located, so it is not asserted here).
+        print("VERIFIED: framing bounds confirmed in BOTH firmwares; "
+              "CRC-16/CCITT confirmed from captures + M0 firmware "
+              "(ESP8266 CRC routine not located)")
     return 1 if fails else 0
 
 
