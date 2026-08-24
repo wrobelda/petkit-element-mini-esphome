@@ -35,14 +35,16 @@ throws away the M0's door and dispense-completion logic.
     no final XOR), computed over the whole frame; appended big-endian. A
     recompute over a received frame *including* its CRC bytes yields `0` when
     valid. (Verified against the captured `get status` / `status` packets.)
-- Key packet types the component uses:
-  - `0x01` get status → `0x02` status reply
-    (payload: food-ok, door-fault, unknown, adapter ADC/mV, battery ADC/mV)
-  - `0x07`/`0x09` open/close door, payload `duration, strength`
-  - `0x0B` dispense, payload `duration, distance, direction, current`
-  - `0x0E` blink LED / beep, payload `subcmd, on_ms(2), off_ms(2), count(2)`
-  - `0x13/0x03/0x05/0x04/0x06/0x0D` — parameter-setting packets replayed at boot
-    to match the stock initialization handshake.
+- Key packet types the component uses (payloads taken from captured stock
+  traffic, not the README prose — see AGENTS.md for the grounded/assumed audit):
+  - `0x01` get status → `0x02` status reply. Payload: food byte, door byte,
+    unknown, then four raw 16-bit fields (the first pair reads ~0 on battery,
+    the second stays non-zero; units/scaling **unconfirmed**).
+  - `0x07`/`0x09` open/close door, payload = **single byte `0x1E`** (stock).
+  - `0x0B` dispense, payload `00 02 01 50` for the stock repeated portion.
+  - `0x0E` blink LED / beep, payload `subcmd, on_ms(2), off_ms(2), count(2)`.
+  - `0x13/0x03/0x05/0x04/0x06/0x0D` — parameter packets replayed at boot in the
+    captured order; the component waits for the M0's ack between each.
 
 Full protocol notes: <https://github.com/earlynerd/petkit-serial-bus>.
 
@@ -93,24 +95,30 @@ Verified: `esphome config` passes and the firmware compiles for `esp8266`
 
 - **Buttons:** Feed now (× *Feed portions*), Dispense 1 portion, Open door,
   Close door, Beep, Refresh status, Reset motor controller.
-- **Number:** Feed portions (how many wheel turns per feed).
-- **Binary sensors:** Food level OK, Door fault, Manual feed button, Wi-Fi
-  button.
-- **Diagnostics:** adapter/battery ADC + millivolt readings from the status
-  packet.
+- **Number:** Feed portions (each = one dispense command).
+- **Binary sensors:** Food level (byte0), Door status flag (byte1), Manual feed
+  button, Wi-Fi button.
+- **Diagnostics:** four raw status fields (see caveats — units unconfirmed).
 
 The physical manual-feed button dispenses **locally**, even with Wi-Fi down —
 which is the whole point.
 
-## Calibration / caveats
+## Calibration / caveats — READ THIS
 
-- One "portion" replays the stock short dispense (`duration=3, distance=1,
-  direction=0, current=16`). Adjust `feed()` in `petkit_feeder.cpp` if your
-  portion size differs, or drive `dispense()` directly from a lambda.
-- The status packet's voltage fields are exposed raw (ADC counts and the
-  firmware's millivolt field). Their exact scaling wasn't nailed down in the
-  reverse engineering, so calibrate against a meter before trusting them as
-  real volts.
-- `reset_pin` polarity assumes active-high (drive high = reset). It's only
-  pulsed by the "Reset motor controller" button; leave it out of the config if
-  you'd rather not touch GPIO15.
+Framing and CRC are proven from both firmwares and the captures. **Command
+semantics are only partly verified, and nothing here has run on a physical
+feeder.** Validate before trusting anything that moves the door or dispenses.
+The full grounded-vs-assumed audit is in `../AGENTS.md`. Highlights:
+
+- One "portion" = one stock dispense command (`00 02 01 50`, captured). The
+  relationship between commands and actual food quantity is **not** established.
+- The four status fields are exposed **raw, without units**. Only the
+  adapter-vs-battery grouping is evidenced (first pair → ~0 on battery); the
+  "ADC vs mV" split and absolute scaling are guesses — calibrate against a meter.
+- The status **food** byte polarity is unverified (every capture shows `0x00`),
+  and the **door** byte's meaning is uncertain (idle mains-powered units show
+  `0x01` constantly, which contradicts the "fault" reading) — exposed as a
+  neutral flag, not a problem sensor.
+- `reset_pin` (GPIO15) polarity is *reasoned* (ESP boot needs GPIO15 low while
+  the M0 is seen running ⇒ low = run) but **not** meter-verified. It's left
+  **commented out** in the YAML; enable only after you confirm it on your unit.
