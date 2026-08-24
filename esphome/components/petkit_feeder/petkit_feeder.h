@@ -20,6 +20,7 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#include "petkit_protocol.h"
 
 namespace esphome {
 namespace petkit_feeder {
@@ -84,7 +85,6 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   void reset_mcu();
 
  protected:
-  static uint16_t crc16_ccitt(const uint8_t *data, size_t len);
   // Build and transmit a frame. seq auto-increments unless you pass one.
   void send_packet_(uint8_t type, const uint8_t *payload, uint8_t payload_len);
   void handle_frame_(const uint8_t *frame, uint8_t len);

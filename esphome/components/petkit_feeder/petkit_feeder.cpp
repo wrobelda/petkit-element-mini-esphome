@@ -26,16 +26,6 @@ static const InitPacket INIT_SEQ[] = {
 static const uint8_t INIT_SEQ_COUNT = sizeof(INIT_SEQ) / sizeof(INIT_SEQ[0]);
 static const uint32_t INIT_STEP_MS = 150;
 
-uint16_t PetkitFeeder::crc16_ccitt(const uint8_t *data, size_t len) {
-  uint16_t crc = 0xFFFF;
-  for (size_t i = 0; i < len; i++) {
-    crc ^= static_cast<uint16_t>(data[i]) << 8;
-    for (uint8_t b = 0; b < 8; b++)
-      crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021) : static_cast<uint16_t>(crc << 1);
-  }
-  return crc;
-}
-
 void PetkitFeeder::setup() {
   if (this->reset_pin_ != nullptr) {
     this->reset_pin_->setup();
@@ -49,18 +39,8 @@ void PetkitFeeder::setup() {
 }
 
 void PetkitFeeder::send_packet_(uint8_t type, const uint8_t *payload, uint8_t payload_len) {
-  uint8_t frame[64];
-  uint8_t len = static_cast<uint8_t>(payload_len + 7);  // 2 hdr + len + type + seq + 2 crc
-  frame[0] = 0xAA;
-  frame[1] = 0xAA;
-  frame[2] = len;
-  frame[3] = type;
-  frame[4] = this->seq_++;
-  for (uint8_t i = 0; i < payload_len; i++)
-    frame[5 + i] = payload[i];
-  uint16_t crc = crc16_ccitt(frame, len - 2);
-  frame[len - 2] = static_cast<uint8_t>(crc >> 8);
-  frame[len - 1] = static_cast<uint8_t>(crc & 0xFF);
+  uint8_t frame[protocol::MAX_FRAME];
+  uint8_t len = protocol::build_frame(frame, type, this->seq_++, payload, payload_len);
   this->write_array(frame, len);
   ESP_LOGV(TAG, "TX type=0x%02X seq=%u len=%u", type, frame[4], len);
 }
@@ -109,37 +89,30 @@ void PetkitFeeder::loop() {
 }
 
 void PetkitFeeder::handle_frame_(const uint8_t *frame, uint8_t len) {
-  if (crc16_ccitt(frame, len) != 0) {
+  if (!protocol::frame_is_valid(frame, len)) {
     ESP_LOGW(TAG, "Bad CRC on frame type=0x%02X len=%u", len >= 4 ? frame[3] : 0, len);
     return;
   }
   const uint8_t type = frame[3];
   const uint8_t seq = frame[4];
-  const uint8_t *data = &frame[5];
-  const uint8_t data_len = len - 7;
 
   switch (type) {
     case PKT_STATUS: {
       // Payload: food(1) door(1) unk(1) adapterAdc(2) adapterMv(2) battAdc(2) battMv(2)
-      if (data_len >= 3) {
-        if (this->food_ok_ != nullptr)
-          this->food_ok_->publish_state(data[0] != 0x00);      // 0x01 = ok, 0x00 = low
-        if (this->door_fault_ != nullptr)
-          this->door_fault_->publish_state(data[1] != 0x00);   // 0x01 = not fully open/closed
-      }
-      if (data_len >= 11) {
-        const uint16_t a_adc = (data[3] << 8) | data[4];
-        const uint16_t a_mv = (data[5] << 8) | data[6];
-        const uint16_t b_adc = (data[7] << 8) | data[8];
-        const uint16_t b_mv = (data[9] << 8) | data[10];
+      protocol::Status st = protocol::parse_status(frame, len);
+      if (this->food_ok_ != nullptr)
+        this->food_ok_->publish_state(st.food_ok);        // 0x01 = ok, 0x00 = low
+      if (this->door_fault_ != nullptr)
+        this->door_fault_->publish_state(st.door_fault);  // 0x01 = not fully open/closed
+      if ((len - protocol::OVERHEAD) >= 11) {
         if (this->adapter_adc_ != nullptr)
-          this->adapter_adc_->publish_state(a_adc);
+          this->adapter_adc_->publish_state(st.adapter_adc);
         if (this->adapter_mv_ != nullptr)
-          this->adapter_mv_->publish_state(a_mv);
+          this->adapter_mv_->publish_state(st.adapter_mv);
         if (this->battery_adc_ != nullptr)
-          this->battery_adc_->publish_state(b_adc);
+          this->battery_adc_->publish_state(st.battery_adc);
         if (this->battery_mv_ != nullptr)
-          this->battery_mv_->publish_state(b_mv);
+          this->battery_mv_->publish_state(st.battery_mv);
       }
       break;
     }
