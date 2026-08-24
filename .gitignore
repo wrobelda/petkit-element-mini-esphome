@@ -1,0 +1,8 @@
+# External reference repo (cloned from earlynerd/petkit-serial-bus)
+/petkit-serial-bus/
+# ESPHome / PlatformIO build artifacts
+.esphome/
+.pioenvs/
+.pio/
+__pycache__/
+*.pyc

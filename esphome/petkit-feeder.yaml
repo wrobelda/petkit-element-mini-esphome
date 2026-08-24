@@ -1,0 +1,179 @@
+# ESPHome firmware for the Petkit Fresh Element Mini ("Feedermini") feeder,
+# replacing the stock ESP8266 cloud firmware for fully local Home Assistant
+# control. The ESP8266 talks to the on-board Nuvoton ISD91230 Cortex-M0 over its
+# hardware UART; the M0 still does all motor driving, door control and sensing.
+#
+# ---- Wiring on the ESP8266 (from petkit-serial-bus reverse engineering) ----
+#   GPIO1  U0TXD  -> ISD91230 RX   (bus TX)
+#   GPIO3  U0RXD  <- ISD91230 TX   (bus RX)
+#   GPIO15        -> ISD91230 reset (low = running; must be low at boot anyway)
+#   GPIO0         -> "wifi reset" pushbutton (also flash/boot pin)
+#   GPIO13        -> "manual feed" pushbutton
+#   GPIO5  SDA / GPIO14 SCL -> PCF8563 RTC (optional, not used here)
+#   GPIO16        -> deep-sleep wake (unused here)
+#
+# ---- Flashing notes ----
+# GPIO1/GPIO3 are shared with the M0. Flash the ESP8266 via the exposed debug
+# header; hold the M0 in reset (GPIO15 high) or power it down while flashing so
+# it does not talk on the bus. After the first serial flash, use OTA.
+
+substitutions:
+  name: petkit-feeder
+  friendly_name: Petkit Feeder
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp8266:
+  # ESP-WROOM-02, 2 MB flash (the stock module). Gives room for OTA.
+  board: esp_wroom_02
+  restore_from_flash: true
+
+# The bus lives on UART0 (GPIO1/GPIO3), so serial logging MUST be disabled to
+# avoid corrupting it. Logs are still available over the network / HA.
+logger:
+  baud_rate: 0
+  level: INFO
+
+# Pull the external component from the local components/ folder in this repo.
+external_components:
+  - source:
+      type: local
+      path: components
+
+api:
+  # Feed will keep working with no network, but expose it to HA when present.
+  # Optional: uncomment to require an encryption key.
+  # encryption:
+  #   key: !secret api_key
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  # Critical for an "offline-first" appliance: if the AP is down, still run and
+  # still honor the physical manual-feed button and any HA on the fallback net.
+  ap:
+    ssid: "${friendly_name} Fallback"
+
+captive_portal:
+
+# --- UART to the ISD91230 motor/sensor co-processor ---
+uart:
+  id: bus
+  tx_pin: GPIO1
+  rx_pin: GPIO3
+  baud_rate: 115200
+  # 8N1 is the default and is what the M0 uses.
+
+# --- The Petkit bus master component ---
+petkit_feeder:
+  id: feeder
+  uart_id: bus
+  reset_pin:
+    number: GPIO15
+    # Active-high reset: high pulses the M0 into reset, low runs it. Must stay
+    # low at boot for the ESP8266 to boot from flash, which matches "running".
+    inverted: false
+  send_init_sequence: true
+  update_interval: 10s
+  food_ok:
+    name: "Food level OK"
+  door_fault:
+    name: "Door fault"
+  adapter_adc:
+    name: "Adapter ADC"
+  adapter_millivolts:
+    name: "Adapter mV"
+  battery_adc:
+    name: "Battery ADC"
+  battery_millivolts:
+    name: "Battery mV"
+
+# --- Physical buttons on the feeder ---
+binary_sensor:
+  - platform: gpio
+    name: "Manual feed button"
+    pin:
+      number: GPIO13
+      inverted: true          # pressed = low
+      mode:
+        input: true
+        pullup: true
+    filters:
+      - delayed_on: 30ms
+    on_press:
+      # Local, cloud-free feed the moment the button is pressed.
+      then:
+        - lambda: 'id(feeder).feed((uint8_t) id(feed_portions).state);'
+
+  - platform: gpio
+    name: "Wifi/reset button"
+    pin:
+      number: GPIO0
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    filters:
+      - delayed_on: 30ms
+
+# --- How many "portions" (short dispense turns) one feed does ---
+number:
+  - platform: template
+    id: feed_portions
+    name: "Feed portions"
+    optimistic: true
+    restore_value: true
+    initial_value: 2
+    min_value: 1
+    max_value: 12
+    step: 1
+    mode: box
+
+# --- Controls exposed to Home Assistant ---
+button:
+  - platform: template
+    name: "Feed now"
+    icon: "mdi:bowl-mix"
+    on_press:
+      - lambda: 'id(feeder).feed((uint8_t) id(feed_portions).state);'
+
+  - platform: template
+    name: "Dispense 1 portion"
+    on_press:
+      - lambda: 'id(feeder).feed(1);'
+
+  - platform: template
+    name: "Open door"
+    entity_category: config
+    on_press:
+      - lambda: 'id(feeder).open_door(10, 30);'
+
+  - platform: template
+    name: "Close door"
+    entity_category: config
+    on_press:
+      - lambda: 'id(feeder).close_door(10, 30);'
+
+  - platform: template
+    name: "Beep"
+    entity_category: config
+    on_press:
+      - lambda: 'id(feeder).beep(100, 200, 3);'
+
+  - platform: template
+    name: "Refresh status"
+    entity_category: diagnostic
+    on_press:
+      - lambda: 'id(feeder).get_status();'
+
+  - platform: template
+    name: "Reset motor controller"
+    entity_category: diagnostic
+    icon: "mdi:restart-alert"
+    on_press:
+      - lambda: 'id(feeder).reset_mcu();'
