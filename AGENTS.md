@@ -121,6 +121,79 @@ Round 2:
 Still open (needs hardware): the step→food-quantity mapping, whether the boot
 config packets are required, status field polarities/units, `reset_pin` polarity.
 
+## UART-free installation research
+
+The stock ESP8266 firmware already contains the pieces needed for a possible
+wireless takeover, but no working Petkit-specific installer exists yet:
+
+- Provisioning supports ESP-Touch, AirKiss, and a SoftAP TCP/JSON server. The
+  local bind schema includes a `server` field, so the first path to investigate
+  is whether SoftAP provisioning can redirect the feeder to a controlled API.
+- The feeder performs device-driven HTTP(S) OTA. An OTA-check response contains
+  `firmwareId`, `version`, `details`, `file`, and `digest`; the downloader uses
+  HTTP range requests, writes the inactive SDK user-bin slot, checks an image
+  CRC/digest, then calls `system_upgrade_reboot()`.
+- Static strings show image integrity checks (`upgrade crc check failed`,
+  `[img_crc]... [flash_crc]`) but no Petkit firmware-signature field or key has
+  been identified. TLS support is present, so server authentication and image
+  authentication must not be conflated; disassemble the OTA-check and final
+  verification call paths before assuming arbitrary images are accepted.
+- In normal provisioned station mode, the feeder at `192.0.2.64` is reachable
+  but refuses connections on the 1,000 common TCP ports. This is consistent
+  with the firmware stopping its SoftAP bind server after provisioning.
+- A network API may reveal the vendor OTA URL and permit downloading an official
+  stock image, but there is no current evidence that it can read arbitrary flash
+  back. A literal backup still likely requires the ROM UART loader or a temporary
+  OTA flash-loader application.
+
+Relevant prior work and what carries over:
+
+- **Tuya-Convert** creates a fake provisioning/update environment for ESP8266
+  devices, installs a small flash loader, backs up stock firmware, then writes a
+  full alternative image. Its protocol exploit is Tuya-specific, but its staged
+  loader and recovery design are directly reusable:
+  <https://github.com/ct-Open-Source/tuya-convert>.
+- **SonOTA / Espressif2Arduino** intercepted the factory Sonoff OTA flow and
+  used staged images to cross from a vendor non-OS SDK image to an Arduino image.
+  This is the closest architectural analogue for Petkit:
+  <https://github.com/mirko/SonOTA>.
+- Espressif's native non-OS FOTA uses paired `user1.bin`/`user2.bin` images; the
+  device selects the inactive slot, downloads it, and changes boot selection.
+  A normal ESPHome serial-flash binary is not automatically a valid Petkit
+  user-bin, so a stock-compatible transition image may be required:
+  <https://www.espressif.com/sites/default/files/99c-esp8266_ota_upgrade_en_v1.6.pdf>.
+- A published Xiaomi/FurryTail ESP8266 feeder incident combined weak APIs and
+  firmware-update weaknesses, showing that this attack class has reached pet
+  feeders, although it is not the same Petkit firmware:
+  <https://www.parksassociates.com/bento/uploads/file/connsummit/2020/materials/firedome/XiaomiPetFeedersFleetHack.pdf>.
+- Existing Petkit API reverse engineering reports that much app↔Petkit API
+  traffic used plain HTTP and documents Feeder Mini/cloud calls. It is useful
+  for authentication and endpoint conventions, but does not yet document this
+  device's OTA route: <https://github.com/morganpartee/pyPetKit>.
+
+Expected cloud traffic topology from firmware strings:
+
+- The feeder maintains an **outbound** Aliyun MQTT connection for asynchronous
+  commands/state (`iot-as-mqtt.*.aliyuncs.com`, `/%s/%s/update`, `/get`, and
+  `/shadow`). The app talks to Petkit's cloud; the cloud publishes the command
+  over that already-established connection, so no inbound port is needed.
+- It also makes outbound Petkit HTTP(S) requests for signup, server information,
+  heartbeat, feed lists/reports, device information, and OTA check/start/status.
+- A router-side capture should therefore record the full experiment, including
+  idle traffic and one app-triggered feed. Use a capture file, not terminal-only
+  output, so DNS, TCP timing, TLS SNI/certificates, HTTP, and MQTT can be examined:
+
+  ```sh
+  tcpdump -i <lan-bridge> -nn -s0 -w /tmp/petkit.pcap host 192.0.2.64
+  ```
+
+  Start before rebooting the feeder, wait for it to reconnect, trigger exactly
+  one distinctive app action, wait another minute, then stop the capture. If the
+  router offloads or bridges traffic outside the CPU, capture on both the LAN
+  bridge and WAN interface or temporarily place the feeder behind a controlled
+  access point. Do not publish the PCAP: provisioning and HTTP traffic may
+  contain Wi-Fi credentials, device secrets, account tokens, or location data.
+
 ## ESP8266 GPIO map
 | GPIO | Function | Used |
 |---|---|---|
