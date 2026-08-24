@@ -24,6 +24,7 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "petkit_protocol.h"
+#include "petkit_framer.h"
 
 namespace esphome {
 namespace petkit_feeder {
@@ -77,10 +78,11 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   void set_battery_b(sensor::Sensor *s) { this->battery_b_ = s; }
 
   // High-level actions, callable from YAML lambdas.
-  // Queue `portions` dispense turns; they are sent one at a time, each waiting
-  // for the M0's 0x0C completion (or a timeout) before the next — matching the
-  // ~1 s stock pacing rather than flooding the bus.
-  void feed(uint8_t portions);
+  // Queue `steps` raw dispense commands; they are sent one at a time, each
+  // waiting for its matching 0x0C completion (or a timeout) before the next.
+  // A "step" is one raw motor command, NOT a proven food portion — the mapping
+  // to food quantity is unverified (see AGENTS.md).
+  void feed(uint8_t steps);
   // Enqueue one raw dispense command: payload duration,distance,direction,current.
   void dispense(uint8_t duration, uint8_t distance, uint8_t direction, uint8_t current);
   // Door commands take a single payload byte (stock firmware sends 0x1E).
@@ -94,15 +96,14 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   void reset_mcu();
 
  protected:
-  // Build and transmit a frame. seq auto-increments.
-  void send_packet_(uint8_t type, const uint8_t *payload, uint8_t payload_len);
+  // Build and transmit a frame; returns the sequence number used.
+  uint8_t send_packet_(uint8_t type, const uint8_t *payload, uint8_t payload_len);
   void handle_frame_(const uint8_t *frame, uint8_t len);
   void blink_beep_(uint8_t subcommand, uint16_t on_ms, uint16_t off_ms, uint16_t count);
   bool ready_() const { return this->init_step_ >= this->init_seq_len_(); }
   uint8_t init_seq_len_() const;
   void enqueue_dispense_(const uint8_t payload[4]);
   void service_dispense_queue_(uint32_t now);
-  void feed_byte_(uint8_t c, uint32_t now);  // RX state machine
 
   GPIOPin *reset_pin_{nullptr};
   bool send_init_{true};
@@ -114,14 +115,8 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   sensor::Sensor *battery_a_{nullptr};
   sensor::Sensor *battery_b_{nullptr};
 
-  // Receive state machine. A frame is AA AA <len> <body...>; we sync on two
-  // consecutive 0xAA, then a length byte, then len-3 body bytes.
-  enum RxState : uint8_t { RX_SYNC, RX_LEN, RX_BODY };
-  RxState rx_state_{RX_SYNC};
-  uint8_t rx_aa_{0};       // consecutive 0xAA seen while syncing
-  uint8_t rx_buf_[protocol::MAX_FRAME];
-  uint8_t rx_len_{0};      // bytes buffered so far
-  uint8_t rx_need_{0};     // total frame length once known
+  // Receive frame assembler (see petkit_framer.h).
+  protocol::FrameAssembler assembler_;
   uint32_t last_byte_ms_{0};
 
   // Startup init state machine. Each config packet is sent, then we wait for
@@ -132,10 +127,11 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   bool init_waiting_ack_{false};
   uint32_t init_deadline_{0};
 
-  // Dispense pacing queue.
-  uint8_t dispense_pending_[4]{0x00, 0x02, 0x01, 0x50};  // last-enqueued payload
-  uint16_t dispense_queue_{0};   // portions still to send
-  bool dispense_busy_{false};    // waiting for a 0x0C completion
+  // Dispense pacing queue: each entry keeps its own 4-byte payload, sent one at
+  // a time and matched to its 0x0C completion by sequence number.
+  protocol::PayloadQueue<16> dispense_q_;
+  bool dispense_busy_{false};      // waiting for a matching 0x0C completion
+  uint8_t dispense_sent_seq_{0};   // seq of the in-flight dispense command
   uint32_t dispense_deadline_{0};
 
   uint8_t seq_{0};

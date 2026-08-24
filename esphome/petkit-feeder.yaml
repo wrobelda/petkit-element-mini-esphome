@@ -116,7 +116,7 @@ binary_sensor:
     on_press:
       # Local, cloud-free feed the moment the button is pressed.
       then:
-        - lambda: 'id(feeder).feed((uint8_t) id(feed_portions).state);'
+        - lambda: 'id(feeder).feed((uint8_t) id(feed_steps).state);'
 
   - platform: gpio
     name: "Wifi/reset button"
@@ -129,11 +129,13 @@ binary_sensor:
     filters:
       - delayed_on: 30ms
 
-# --- How many "portions" (short dispense turns) one feed does ---
+# How many raw dispense STEPS one feed sends. A "step" is one captured stock
+# dispense command (00 02 01 50); its mapping to actual food quantity is NOT
+# established (see README/AGENTS.md) — calibrate on hardware.
 number:
   - platform: template
-    id: feed_portions
-    name: "Feed portions"
+    id: feed_steps
+    name: "Dispense steps (raw, uncalibrated)"
     optimistic: true
     restore_value: true
     initial_value: 2
@@ -148,10 +150,10 @@ button:
     name: "Feed now"
     icon: "mdi:bowl-mix"
     on_press:
-      - lambda: 'id(feeder).feed((uint8_t) id(feed_portions).state);'
+      - lambda: 'id(feeder).feed((uint8_t) id(feed_steps).state);'
 
   - platform: template
-    name: "Dispense 1 portion"
+    name: "Dispense 1 step"
     on_press:
       - lambda: 'id(feeder).feed(1);'
 

@@ -44,11 +44,13 @@ void PetkitFeeder::setup() {
   this->init_next_ms_ = millis() + 500;
 }
 
-void PetkitFeeder::send_packet_(uint8_t type, const uint8_t *payload, uint8_t payload_len) {
+uint8_t PetkitFeeder::send_packet_(uint8_t type, const uint8_t *payload, uint8_t payload_len) {
   uint8_t frame[protocol::MAX_FRAME];
-  uint8_t len = protocol::build_frame(frame, type, this->seq_++, payload, payload_len);
+  uint8_t seq = this->seq_++;
+  uint8_t len = protocol::build_frame(frame, type, seq, payload, payload_len);
   this->write_array(frame, len);
-  ESP_LOGV(TAG, "TX type=0x%02X seq=%u len=%u", type, frame[4], len);
+  ESP_LOGV(TAG, "TX type=0x%02X seq=%u len=%u", type, seq, len);
+  return seq;
 }
 
 uint8_t PetkitFeeder::init_seq_len_() const { return INIT_SEQ_COUNT; }
@@ -76,62 +78,18 @@ void PetkitFeeder::loop() {
   while (this->available()) {
     uint8_t c;
     this->read_byte(&c);
-    this->feed_byte_(c, now);
+    this->last_byte_ms_ = now;
+    if (this->assembler_.feed(c))
+      this->handle_frame_(this->assembler_.buf(), this->assembler_.len());
   }
 
   // Drop a partial frame if the bus goes quiet mid-frame.
-  if (this->rx_state_ != RX_SYNC && (now - this->last_byte_ms_) > 50) {
-    this->rx_state_ = RX_SYNC;
-    this->rx_aa_ = 0;
-  }
+  if (this->assembler_.in_progress() && (now - this->last_byte_ms_) > 50)
+    this->assembler_.reset();
 
   // Pace queued dispense commands (only once init has completed).
   if (this->ready_())
     this->service_dispense_queue_(now);
-}
-
-// RX state machine: sync on two consecutive 0xAA, then a length byte, then
-// len-3 body bytes. Resync reconsiders the current byte as a possible header
-// start, so a stray 0xAA before a real frame cannot swallow it.
-void PetkitFeeder::feed_byte_(uint8_t c, uint32_t now) {
-  this->last_byte_ms_ = now;
-  switch (this->rx_state_) {
-    case RX_SYNC:
-      if (c == 0xAA) {
-        if (this->rx_aa_ < 2)
-          this->rx_aa_++;
-        if (this->rx_aa_ >= 2)
-          this->rx_state_ = RX_LEN;
-      } else {
-        this->rx_aa_ = 0;
-      }
-      break;
-    case RX_LEN:
-      if (c == 0xAA) {
-        // Another 0xAA: still a valid header pair, keep waiting for a length.
-        break;
-      }
-      if (c >= protocol::OVERHEAD && c <= protocol::MAX_FRAME) {
-        this->rx_buf_[0] = 0xAA;
-        this->rx_buf_[1] = 0xAA;
-        this->rx_buf_[2] = c;
-        this->rx_len_ = 3;
-        this->rx_need_ = c;
-        this->rx_state_ = RX_BODY;
-      } else {
-        this->rx_state_ = RX_SYNC;  // bogus length; drop and resync
-        this->rx_aa_ = 0;
-      }
-      break;
-    case RX_BODY:
-      this->rx_buf_[this->rx_len_++] = c;
-      if (this->rx_len_ >= this->rx_need_) {
-        this->handle_frame_(this->rx_buf_, this->rx_need_);
-        this->rx_state_ = RX_SYNC;
-        this->rx_aa_ = 0;
-      }
-      break;
-  }
 }
 
 void PetkitFeeder::handle_frame_(const uint8_t *frame, uint8_t len) {
@@ -180,7 +138,10 @@ void PetkitFeeder::handle_frame_(const uint8_t *frame, uint8_t len) {
     }
     case PKT_DISPENSED:
       ESP_LOGI(TAG, "Dispense complete (seq=%u)", seq);
-      this->dispense_busy_ = false;  // release the queue for the next portion
+      // Only the completion for the in-flight command releases the queue; a
+      // late completion from a timed-out command (different seq) is ignored.
+      if (this->dispense_busy_ && seq == this->dispense_sent_seq_)
+        this->dispense_busy_ = false;
       break;
     case PKT_DOOR_OPENED:
       ESP_LOGI(TAG, "Door open complete (seq=%u)", seq);
@@ -204,33 +165,38 @@ void PetkitFeeder::update() {
 
 void PetkitFeeder::get_status() { this->send_packet_(PKT_GET_STATUS, nullptr, 0); }
 
-// Per-portion dispense payload as seen in captured stock traffic: the repeated
-// command is 00 02 01 50 (duration=0, distance=2, direction=1, current=0x50).
-static const uint8_t STOCK_DISPENSE[4] = {0x00, 0x02, 0x01, 0x50};
-// Timeout waiting for a 0x0C completion before we give up and send the next.
-static const uint32_t DISPENSE_TIMEOUT_MS = 1500;
+// The repeated dispense command seen in captured stock traffic:
+// 00 02 01 50 (duration=0, distance=2, direction=1, current=0x50). NOTE: this
+// is one raw motor command, NOT a proven food "portion" — see AGENTS.md. The
+// stock feed transaction is more complex (FF 01 01 50 / 01 01 01 50 lead-in,
+// then repeated 00 02 01 50 with immediate zero-filled completions).
+static const uint8_t STOCK_DISPENSE_STEP[4] = {0x00, 0x02, 0x01, 0x50};
+// Timeout waiting for a matching 0x0C completion before giving up on it. Stock
+// completions can arrive seconds after the command, so keep this generous;
+// sequence matching (not this timeout) is what prevents premature release.
+static const uint32_t DISPENSE_TIMEOUT_MS = 4000;
 
 void PetkitFeeder::enqueue_dispense_(const uint8_t payload[4]) {
-  for (uint8_t i = 0; i < 4; i++)
-    this->dispense_pending_[i] = payload[i];
-  if (this->dispense_queue_ < 0xFFFF)
-    this->dispense_queue_++;
+  if (!this->dispense_q_.push(payload))
+    ESP_LOGW(TAG, "Dispense queue full; command dropped");
 }
 
 void PetkitFeeder::service_dispense_queue_(uint32_t now) {
   if (this->dispense_busy_) {
     if (static_cast<int32_t>(now - this->dispense_deadline_) < 0)
-      return;  // still waiting for completion
-    ESP_LOGW(TAG, "Dispense completion timed out; continuing queue");
+      return;  // still waiting for the matching completion
+    ESP_LOGW(TAG, "Dispense completion (seq=%u) timed out; continuing queue",
+             this->dispense_sent_seq_);
     this->dispense_busy_ = false;
   }
-  if (this->dispense_queue_ == 0)
+  uint8_t p[4];
+  if (!this->dispense_q_.pop(p))
     return;
-  this->dispense_queue_--;
-  this->send_packet_(PKT_DISPENSE, this->dispense_pending_, 4);
+  this->dispense_sent_seq_ = this->send_packet_(PKT_DISPENSE, p, 4);
   this->dispense_busy_ = true;
   this->dispense_deadline_ = now + DISPENSE_TIMEOUT_MS;
-  ESP_LOGI(TAG, "Dispense sent (%u queued)", this->dispense_queue_);
+  ESP_LOGI(TAG, "Dispense step sent seq=%u (%u queued)", this->dispense_sent_seq_,
+           this->dispense_q_.size());
 }
 
 void PetkitFeeder::dispense(uint8_t duration, uint8_t distance, uint8_t direction, uint8_t current) {
@@ -238,12 +204,15 @@ void PetkitFeeder::dispense(uint8_t duration, uint8_t distance, uint8_t directio
   this->enqueue_dispense_(p);
 }
 
-void PetkitFeeder::feed(uint8_t portions) {
-  if (portions == 0)
-    portions = 1;
-  for (uint8_t i = 0; i < portions; i++)
-    this->enqueue_dispense_(STOCK_DISPENSE);
-  ESP_LOGI(TAG, "Feed queued: %u portion(s)", portions);
+void PetkitFeeder::feed(uint8_t steps) {
+  // Each "step" is one raw STOCK_DISPENSE_STEP command. The mapping from steps
+  // to actual food quantity is NOT established (see AGENTS.md) — calibrate on
+  // hardware before relying on it.
+  if (steps == 0)
+    steps = 1;
+  for (uint8_t i = 0; i < steps; i++)
+    this->enqueue_dispense_(STOCK_DISPENSE_STEP);
+  ESP_LOGI(TAG, "Feed queued: %u dispense step(s)", steps);
 }
 
 void PetkitFeeder::open_door(uint8_t param) {
@@ -290,11 +259,13 @@ void PetkitFeeder::reset_mcu() {
   delay(20);
   this->reset_pin_->digital_write(false);
   // Drop any queued motion so nothing dispenses across a reset.
-  this->dispense_queue_ = 0;
+  this->dispense_q_.clear();
   this->dispense_busy_ = false;
-  this->rx_state_ = RX_SYNC;
-  this->rx_aa_ = 0;
+  this->assembler_.reset();
+  // Restart the handshake cleanly, clearing any pending ack-wait state.
   this->init_step_ = this->send_init_ ? 0 : INIT_SEQ_COUNT;
+  this->init_waiting_ack_ = false;
+  this->init_deadline_ = 0;
   this->init_next_ms_ = millis() + 500;
 }
 
