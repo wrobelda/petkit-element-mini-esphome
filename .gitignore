@@ -6,3 +6,20 @@
 .pio/
 __pycache__/
 *.pyc
+
+# Packet captures and stock firmware may contain device credentials.
+*.pcap
+*.pcapng
+*.bin
+
+# Local credentials and runtime output.
+/petkit-private-credentials.json
+*.log
+
+# Re-downloadable local research tools, APKs, and extracted private artifacts.
+/local-cache/
+
+# Local review reports and agent input are not project sources.
+/reviews/
+/gemini-3.8-flash.md
+/glm-5.3.md
