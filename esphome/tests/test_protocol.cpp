@@ -34,6 +34,14 @@ static std::vector<uint8_t> bytes(std::initializer_list<int> v) {
 }
 
 int main() {
+  CHECK(!serving_count_is_valid(0), "zero servings rejected");
+  CHECK(serving_count_is_valid(1), "one serving accepted");
+  CHECK(serving_count_is_valid(MAX_SERVINGS), "maximum serving count accepted");
+  CHECK(!serving_count_is_valid(MAX_SERVINGS + 1), "oversized serving count rejected");
+  CHECK(!serving_count_is_valid(0xFF), "free-running M0 count rejected");
+  CHECK(motion_timeout_ms(1) == 30000, "single-serving timeout keeps safe minimum");
+  CHECK(motion_timeout_ms(20) == 60000, "large-feed timeout scales with servings");
+
   // --- CRC over captured frames, whole-frame recompute must be 0 ---
   auto get_status = bytes({0xAA, 0xAA, 0x07, 0x01, 0x01, 0x59, 0x9B});
   auto status_ack = bytes({0xAA, 0xAA, 0x08, 0x01, 0x01, 0x01, 0x94, 0x13});

@@ -222,7 +222,6 @@ void PetkitFeeder::update() {
 void PetkitFeeder::get_status() { this->send_packet_(PKT_GET_STATUS, nullptr, 0); }
 
 static const uint8_t WHEEL_QUERY[4] = {0x00, 0x02, 0x01, 0x50};
-static const uint32_t MOTION_TIMEOUT_MS = 30000;
 static const uint32_t DOOR_TIMEOUT_MS = 4000;
 
 void PetkitFeeder::feed(uint8_t servings) {
@@ -234,8 +233,11 @@ void PetkitFeeder::feed(uint8_t servings) {
     ESP_LOGW(TAG, "Feed ignored: another feed is active");
     return;
   }
-  if (servings == 0)
-    servings = 1;
+  if (!protocol::serving_count_is_valid(servings)) {
+    ESP_LOGW(TAG, "Feed ignored: serving count %u is outside 1..%u", servings,
+             protocol::MAX_SERVINGS);
+    return;
+  }
   this->manual_feed_ = false;
   this->manual_button_held_ = false;
   this->feed_servings_ = servings;
@@ -293,7 +295,7 @@ void PetkitFeeder::start_counted_motion_() {
   this->feed_state_ = FEED_DISPENSING;
   this->feed_query_pending_ = false;
   this->feed_next_action_ms_ = millis() + 1000;
-  this->feed_deadline_ms_ = millis() + MOTION_TIMEOUT_MS;
+  this->feed_deadline_ms_ = millis() + protocol::motion_timeout_ms(this->feed_servings_);
 }
 
 void PetkitFeeder::start_closing_(uint32_t now) {

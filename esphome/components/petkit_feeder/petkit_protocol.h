@@ -31,6 +31,22 @@ static const uint8_t M0_MIN_LEN = 6;
 static const uint8_t M0_MAX_LEN = 0x13;  // 19
 static const uint8_t MAX_FRAME = M0_MAX_LEN;
 
+// The published configuration exposes at most 20 approximately-5 g servings
+// in one transaction. The M0 treats 0xFF as a special free-running count, so
+// reject values outside the supported range instead of forwarding them.
+static const uint8_t MAX_SERVINGS = 20;
+static const uint32_t MIN_MOTION_TIMEOUT_MS = 30000;
+static const uint32_t MOTION_TIMEOUT_PER_SERVING_MS = 3000;
+
+inline bool serving_count_is_valid(uint8_t servings) {
+  return servings >= 1 && servings <= MAX_SERVINGS;
+}
+
+inline uint32_t motion_timeout_ms(uint8_t servings) {
+  const uint32_t scaled = static_cast<uint32_t>(servings) * MOTION_TIMEOUT_PER_SERVING_MS;
+  return scaled > MIN_MOTION_TIMEOUT_MS ? scaled : MIN_MOTION_TIMEOUT_MS;
+}
+
 inline uint16_t crc16_ccitt(const uint8_t *data, size_t len) {
   uint16_t crc = 0xFFFF;
   for (size_t i = 0; i < len; i++) {
