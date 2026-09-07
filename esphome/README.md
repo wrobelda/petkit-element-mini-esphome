@@ -146,8 +146,10 @@ Verified: `esphome config` passes and the encrypted-API firmware compiles for
   GPIO3/UART0 RX, and TX1 connects only to GPIO2/UART1 TX. There is no RX1
   pad. These connections were verified with an unpowered continuity test.
 - **Back up the stock flash first** (`esptool.py read_flash 0 0x200000
-  stock.bin`) so you can restore Petkit firmware if ever needed. The repo's
-  `flash dumps/petkitesp8266flash.bin` is one such dump for reference.
+  stock.bin`) so you can restore Petkit firmware if ever needed. The optional
+  firmware-verification tests read a private reference dump from an ignored
+  local `petkit-serial-bus/flash dumps/` directory; no stock dump is distributed
+  by this project.
 
 [nonos-hardware]: https://github.com/wrobelda/petkit-compat-server/blob/main/devices/esp8266/nonos_v2/HARDWARE.md
 [mini-hardware]: https://github.com/wrobelda/petkit-compat-server/blob/main/devices/esp8266/nonos_v2/fresh-element-mini/HARDWARE.md
