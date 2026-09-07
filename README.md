@@ -168,21 +168,24 @@ when Petkit's stock ESP8266 OTA client initially installs it in the lower slot.
 #### 5. Preserve recovery data and install the final image
 
 Find the Petkit Kickstart address in Home Assistant or in the router's client
-list. Download and keep its 2 MiB recovery image. Compared with a pristine
-pre-installation dump, it is missing only the older Petkit application that
-Petkit's stock ESP8266 OTA client replaced with Kickstart. The recovery image
-still contains the feeder's identity and stock cloud credentials, so keep the
-file private and do not publish it.
+list. Download and keep its 2 MiB recovery image. This image is not a pristine
+stock backup: it contains the stock bootloader, device identity, RF data,
+system parameters, and any stock application slot that was not overwritten.
+Automatic Kickstart relocation can overwrite both stock application slots.
+The recovery image contains private device credentials, so do not publish it.
 
 Set the address and the web username from `secrets.yaml`; `curl` prompts for the
-web password:
+web password. Return to the `petkit-element-mini-esphome` checkout first, so the
+firmware path below resolves correctly:
 
 ```sh
+cd ../petkit-element-mini-esphome
 export KICKSTART_IP='<Kickstart IP address>'
 export KICKSTART_WEB_USERNAME='admin'
-curl --digest --user "$KICKSTART_WEB_USERNAME" \
+curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
   --output petkit-post-kickstart.bin \
   "http://$KICKSTART_IP/hub/flash_read"
+test "$(wc -c < petkit-post-kickstart.bin | tr -d ' ')" -eq 2097152
 
 curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
   --form firmware=@esphome/.esphome/build/petkit-feeder/.pioenvs/petkit-feeder/firmware.factory.bin \
