@@ -275,7 +275,9 @@ Expected cloud traffic topology from firmware strings:
 - `esphome/tests/` (`./run_tests.sh`): `test_protocol.cpp` (native C++ on the
   shipping code, vectors = captured frames), `test_captures.py` (capture
   regression), `verify_firmware.py` (dual-chip instruction-level proof).
-- Verified: `esphome config` passes; compiles for esp8266 (~37% flash, ~40% RAM).
+- Verified: `esphome config` passes and the ESP8266 build fits the 2 MiB module;
+  keep current resource measurements in `esphome/README.md` rather than
+  duplicating them here.
 
 ## Flashing gotchas
 
