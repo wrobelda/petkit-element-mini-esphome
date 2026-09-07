@@ -95,9 +95,6 @@ ISD91230 stores the schedule itself.
 - `components/petkit_feeder/` — the external component that implements the bus
   master (framing, CRC, status parsing, and the feed/door/beep actions).
 - `secrets.yaml` — fill in your Wi-Fi credentials.
-- `../upstream/devices.esphome.io/` — a staged ESPHome Devices catalogue page
-  and validator-compatible hardware configuration. Flashing guidance remains
-  separate while the generic ESP8266 migration interface is reviewed.
 
 ## Relationship to the Fresh Element Solo
 

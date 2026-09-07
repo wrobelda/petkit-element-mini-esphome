@@ -35,9 +35,9 @@
 - Publish this repository. Pin the installer's compatibility-server and
   Kickstart dependencies to reviewed tags or commits, pin the staged device
   page's component source to a stable tag or commit, add publishable board
-  photographs, and submit
-  `upstream/devices.esphome.io/petkit-fresh-element-mini`. The page and YAML
-  already pass the current devices.esphome.io validators.
+  photographs, and submit the staged Fresh Element Mini page from the separate
+  `devices.esphome.io` checkout. The page and YAML already pass the current
+  devices.esphome.io validators.
 - Ask `homeassistant-extras/petkit-device-cards` to recognize ESPHome Petkit
   devices by their ESPHome project metadata. Its card works with an explicitly
   selected Home Assistant device ID, but its visual editor currently lists only
