@@ -191,7 +191,7 @@ provides the required entry points:
 - Petkit's stock ESP8266 OTA client checks the V2 image checksum and appended
   SDK CRC32. It accepted and booted the generated Kickstart image; no
   additional Petkit firmware signature was required in the tested path.
-- In normal provisioned station mode, the feeder at `192.0.2.64` is reachable
+- In normal provisioned station mode, the tested feeder is reachable
   but refuses connections on the 1,000 common TCP ports. This is consistent
   with the firmware stopping its SoftAP bind server after provisioning.
 - The transition image can read the complete flash through its authenticated
@@ -237,7 +237,8 @@ Expected cloud traffic topology from firmware strings:
   output, so DNS, TCP timing, TLS SNI/certificates, HTTP, and MQTT can be examined:
 
   ```sh
-  tcpdump -i <lan-bridge> -nn -s0 -w /tmp/petkit.pcap host 192.0.2.64
+  FEEDER_ADDRESS=192.0.2.64
+  tcpdump -i <lan-bridge> -nn -s0 -w /tmp/petkit.pcap host "$FEEDER_ADDRESS"
   ```
 
   Start before rebooting the feeder, wait for it to reconnect, trigger exactly
