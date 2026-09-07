@@ -10,7 +10,7 @@ supported. The ESP32-based Fresh Element Solo is a different device.
 ## Features
 
 - local feeding from Home Assistant or the feeder's physical button;
-- four schedules stored and evaluated on the feeder;
+- four schedules by default, with additional slots configurable in YAML;
 - battery-backed timekeeping during network and power outages;
 - food detection, power-source reporting, and diagnostic feedback;
 - normal ESPHome updates after the initial firmware migration.
