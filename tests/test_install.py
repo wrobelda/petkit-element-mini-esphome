@@ -42,6 +42,16 @@ class SecretsTest(unittest.TestCase):
 
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
+    def test_generated_secrets_include_timezone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "secrets.yaml"
+            answers = iter(["TestWiFi", "wifi-password", "Europe/Warsaw", "ap-password", "admin", "web-password"])
+            with mock.patch.object(install, "prompt", side_effect=answers):
+                values = install.write_secrets(path)
+
+            self.assertEqual(values["timezone"], "Europe/Warsaw")
+            self.assertEqual(install.read_simple_secrets(path)["timezone"], "Europe/Warsaw")
+
 
 class CheckoutTest(unittest.TestCase):
     def make_checkout(self, parent: Path, name: str, origin: str) -> Path:

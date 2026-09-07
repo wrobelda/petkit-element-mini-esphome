@@ -141,9 +141,11 @@ time:
     id: hardware_time
     i2c_id: rtc_bus
     address: 0x51
+    timezone: !secret timezone
     update_interval: never
   - platform: homeassistant
     id: homeassistant_time
+    timezone: !secret timezone
     on_time_sync:
       then:
         - pcf8563.write_time:

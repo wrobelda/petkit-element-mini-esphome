@@ -41,6 +41,7 @@ PROFILE = Path("devices/esp8266/nonos_v2/fresh-element-mini/profile.json")
 PLACEHOLDER_SECRETS = {
     "wifi_ssid": "YourWiFi",
     "wifi_password": "YourWiFiPassword",
+    "timezone": "Your/Timezone",
     "fallback_ap_password": "ChangeThisAPPassword",
     "kickstart_web_password": "ChangeThisWebPassword",
     "api_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
@@ -126,6 +127,7 @@ def write_secrets(path: Path) -> dict[str, str]:
     values = {
         "wifi_ssid": prompt("2.4 GHz Wi-Fi network name"),
         "wifi_password": prompt("Wi-Fi password", secret=True),
+        "timezone": prompt("IANA time zone", detect_timezone()),
         "fallback_ap_password": prompt(
             "Fallback access-point password", secrets.token_urlsafe(12)
         ),
@@ -283,6 +285,7 @@ def main() -> None:
     required = {
         "wifi_ssid",
         "wifi_password",
+        "timezone",
         "fallback_ap_password",
         "kickstart_web_username",
         "kickstart_web_password",
@@ -341,7 +344,7 @@ def main() -> None:
     )
 
     computer_ip = prompt("This computer's address on the target Wi-Fi", detect_local_ip())
-    timezone_name = prompt("IANA time zone", detect_timezone())
+    timezone_name = values["timezone"]
     offset = datetime.now().astimezone().utcoffset()
     timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
     firewall_added = configure_firewall()

@@ -76,9 +76,9 @@ under ESPHome's normal layout. Both configurations read the same
 `esphome/secrets.yaml`, so Home Assistant retains one device entry through the
 migration.
 
-Edit that file. Set the target 2.4 GHz Wi-Fi credentials, a unique fallback-AP
-password, a unique Kickstart web login, and an API encryption key generated
-with `openssl rand -base64 32`.
+Edit that file. Set the target 2.4 GHz Wi-Fi credentials, the feeder's IANA
+time-zone name, a unique fallback-AP password, a unique Kickstart web login,
+and an API encryption key generated with `openssl rand -base64 32`.
 
 Build the transition and final images:
 
