@@ -223,6 +223,12 @@ Relevant prior work and what carries over:
   traffic used plain HTTP and documents Feeder Mini/cloud calls. It is useful
   for authentication and endpoint conventions, but does not yet document this
   device's OTA route: <https://github.com/morganpartee/pyPetKit>.
+- [`ottoherdy/petkit-fresh-element-mini-esphome`](https://github.com/ottoherdy/petkit-fresh-element-mini-esphome)
+  is an independent pure-YAML ESPHome implementation for the same feeder. Its
+  door and food status mapping agrees with the M0 disassembly here. Its `0x11`
+  boot requirement and `03 01 00 10` dispense payload come from the earlynerd
+  test script or local experiments rather than the stock traces, so do not copy
+  those claims over the trace- and disassembly-backed behavior in this project.
 
 Expected cloud traffic topology from firmware strings:
 
