@@ -65,10 +65,14 @@ Full protocol notes: <https://github.com/earlynerd/petkit-serial-bus>.
 | 5/14 | I²C SDA/SCL to PCF8563 RTC        | battery-backed local time         |
 | 16   | deep-sleep wake                  | not used                          |
 
+## Real Time Clock
+
 The feeder has a PCF8563 RTC backed by a small internal battery. ESPHome reads
 it at boot, so the system clock survives a temporary power loss even when the
 network remains unavailable. Home Assistant corrects the clock and writes the
 new time back to the RTC after the native API reconnects.
+
+## Feeding schedule
 
 Four daily schedule slots run entirely on the feeder. Each slot has a
 persistent enable switch, time, and amount in 5 g increments. All slots are
