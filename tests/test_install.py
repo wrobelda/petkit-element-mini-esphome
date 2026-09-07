@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -39,6 +40,81 @@ class SecretsTest(unittest.TestCase):
             install.load_or_create_secrets(path)
 
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+
+class CheckoutTest(unittest.TestCase):
+    def make_checkout(self, parent: Path, name: str, origin: str) -> Path:
+        path = parent / name
+        path.mkdir()
+        subprocess.run(["git", "init", "--quiet"], cwd=path, check=True)
+        subprocess.run(["git", "remote", "add", "origin", origin], cwd=path, check=True)
+        for marker in install.REPOSITORY_MARKERS[name]:
+            marker_path = path / marker
+            marker_path.parent.mkdir(parents=True, exist_ok=True)
+            marker_path.touch()
+        return path
+
+    def test_accepts_expected_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            expected = self.make_checkout(
+                parent,
+                "petkit-compat-server",
+                "git@github.com:wrobelda/petkit-compat-server.git",
+            )
+
+            actual = install.ensure_checkout(
+                parent,
+                "petkit-compat-server",
+                install.REPOSITORIES["petkit-compat-server"],
+            )
+
+            self.assertEqual(actual, expected)
+
+    def test_accepts_canonical_kickstart_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            expected = self.make_checkout(
+                parent,
+                "esphome-kickstart",
+                "https://github.com/libretiny-eu/esphome-kickstart.git",
+            )
+
+            actual = install.ensure_checkout(
+                parent,
+                "esphome-kickstart",
+                install.REPOSITORIES["esphome-kickstart"],
+            )
+
+            self.assertEqual(actual, expected)
+
+    def test_rejects_unrelated_checkout(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            self.make_checkout(
+                parent,
+                "petkit-compat-server",
+                "https://github.com/example/unrelated.git",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "unexpected origin"):
+                install.ensure_checkout(
+                    parent,
+                    "petkit-compat-server",
+                    install.REPOSITORIES["petkit-compat-server"],
+                )
+
+    def test_rejects_non_checkout_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            (parent / "petkit-compat-server").mkdir()
+
+            with self.assertRaisesRegex(RuntimeError, "not a Git checkout"):
+                install.ensure_checkout(
+                    parent,
+                    "petkit-compat-server",
+                    install.REPOSITORIES["petkit-compat-server"],
+                )
 
 
 if __name__ == "__main__":

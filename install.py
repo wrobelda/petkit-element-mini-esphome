@@ -16,11 +16,26 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 
 
 REPOSITORIES = {
     "petkit-compat-server": "https://github.com/wrobelda/petkit-compat-server.git",
     "esphome-kickstart": "https://github.com/wrobelda/esphome-kickstart.git",
+}
+ALLOWED_REPOSITORY_ORIGINS = {
+    "petkit-compat-server": {"wrobelda/petkit-compat-server"},
+    "esphome-kickstart": {
+        "libretiny-eu/esphome-kickstart",
+        "wrobelda/esphome-kickstart",
+    },
+}
+REPOSITORY_MARKERS = {
+    "petkit-compat-server": ("serve_petkit_api.py", "provision_petkit_device.py"),
+    "esphome-kickstart": (
+        "components/esp8266_nonos_v2_to_eboot_v1/__init__.py",
+        "tools/build_esp8266_nonos_v2.py",
+    ),
 }
 PROFILE = Path("devices/esp8266/nonos_v2/fresh-element-mini/profile.json")
 PLACEHOLDER_SECRETS = {
@@ -150,11 +165,48 @@ def wait_for_host(host: str, port: int, timeout: int = 180) -> str:
     raise RuntimeError(f"{host}:{port} did not become reachable within {timeout} seconds")
 
 
+def github_repository(url: str) -> str | None:
+    if url.startswith("git@github.com:"):
+        path = url.removeprefix("git@github.com:")
+    else:
+        parsed = urllib.parse.urlsplit(url)
+        if parsed.hostname != "github.com":
+            return None
+        path = parsed.path.lstrip("/")
+    return path.removesuffix(".git").rstrip("/")
+
+
+def validate_checkout(path: Path, name: str) -> None:
+    if not (path / ".git").exists():
+        raise RuntimeError(f"{path} exists but is not a Git checkout")
+    try:
+        origin = subprocess.run(
+            ["git", "remote", "get-url", "origin"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError(f"{path} has no readable origin remote") from error
+    repository = github_repository(origin)
+    if repository not in ALLOWED_REPOSITORY_ORIGINS[name]:
+        expected = ", ".join(sorted(ALLOWED_REPOSITORY_ORIGINS[name]))
+        raise RuntimeError(
+            f"{path} has unexpected origin {origin!r}; expected {expected}"
+        )
+    missing = [marker for marker in REPOSITORY_MARKERS[name] if not (path / marker).is_file()]
+    if missing:
+        raise RuntimeError(f"{path} is missing required files: {', '.join(missing)}")
+
+
 def ensure_checkout(parent: Path, name: str, url: str) -> Path:
     path = parent / name
     if path.is_dir():
+        validate_checkout(path, name)
         return path
     run(["git", "clone", url, name], cwd=parent)
+    validate_checkout(path, name)
     return path
 
 
