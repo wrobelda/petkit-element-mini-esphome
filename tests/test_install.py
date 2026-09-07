@@ -4,6 +4,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import install
@@ -116,6 +117,47 @@ class CheckoutTest(unittest.TestCase):
                     install.REPOSITORIES["petkit-compat-server"],
                 )
 
+
+class RecoveryDownloadTest(unittest.TestCase):
+    def test_creates_private_recovery_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recovery.bin"
+
+            def write_download(arguments: list[str], **_kwargs: object) -> None:
+                Path(arguments[1]).write_bytes(b"recovery")
+
+            with mock.patch.object(
+                install, "run_authenticated_curl", side_effect=write_download
+            ):
+                install.download_recovery(
+                    path,
+                    url="http://192.0.2.1/hub/flash_read",
+                    username="admin",
+                    password="secret",
+                    cwd=Path(directory),
+                )
+
+            self.assertEqual(path.read_bytes(), b"recovery")
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_removes_partial_recovery_after_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "recovery.bin"
+            with mock.patch.object(
+                install,
+                "run_authenticated_curl",
+                side_effect=subprocess.CalledProcessError(22, ["curl"]),
+            ):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    install.download_recovery(
+                        path,
+                        url="http://192.0.2.1/hub/flash_read",
+                        username="admin",
+                        password="secret",
+                        cwd=Path(directory),
+                    )
+
+            self.assertFalse(path.exists())
 
 if __name__ == "__main__":
     unittest.main()

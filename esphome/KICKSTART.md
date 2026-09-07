@@ -85,7 +85,8 @@ bridge full-flash download is still a useful recovery image because it contains
 the bootloader, the unchanged stock ESP8266 firmware in the other slot, device
 identity, RF data, and system parameters. A complete pre-installation stock
 backup must be read through the ESP8266 ROM UART loader before installing the
-bridge.
+bridge. The recovery image may contain stock cloud credentials, so keep it
+private and do not publish it.
 
 ### How the bridge identifies the active slot
 

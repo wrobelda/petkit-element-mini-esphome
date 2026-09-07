@@ -167,7 +167,9 @@ when Petkit's stock ESP8266 OTA client initially installs it in the lower slot.
 Find the Petkit Kickstart address in Home Assistant or in the router's client
 list. Download and keep its 2 MiB recovery image. Compared with a pristine
 pre-installation dump, it is missing only the older Petkit application that
-Petkit's stock ESP8266 OTA client replaced with Kickstart.
+Petkit's stock ESP8266 OTA client replaced with Kickstart. The recovery image
+still contains the feeder's identity and stock cloud credentials, so keep the
+file private and do not publish it.
 
 Set the address and the web username from `secrets.yaml`; `curl` prompts for the
 web password:

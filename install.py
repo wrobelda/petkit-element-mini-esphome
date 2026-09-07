@@ -69,6 +69,24 @@ def run_authenticated_curl(
     )
 
 
+def download_recovery(
+    path: Path, *, url: str, username: str, password: str, cwd: Path
+) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.close(descriptor)
+    try:
+        run_authenticated_curl(
+            ["--output", str(path), url],
+            username=username,
+            password=password,
+            cwd=cwd,
+        )
+        path.chmod(0o600)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+
+
 def prompt(label: str, default: str | None = None, *, secret: bool = False) -> str:
     suffix = f" [{default}]" if default else ""
     reader = getpass.getpass if secret else input
@@ -367,12 +385,9 @@ def main() -> None:
         print(f"Kickstart is reachable at {kickstart_ip}")
 
         recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
-        run_authenticated_curl(
-            [
-                "--output",
-                str(recovery),
-                f"http://{kickstart_ip}/hub/flash_read",
-            ],
+        download_recovery(
+            recovery,
+            url=f"http://{kickstart_ip}/hub/flash_read",
             username=values["kickstart_web_username"],
             password=values["kickstart_web_password"],
             cwd=project,
