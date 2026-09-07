@@ -1,5 +1,3 @@
-# External reference repo (cloned from earlynerd/petkit-serial-bus)
-/petkit-serial-bus/
 # ESPHome / PlatformIO build artifacts
 .venv/
 .esphome/

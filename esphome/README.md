@@ -145,9 +145,9 @@ module.
   pad. These connections were verified with an unpowered continuity test.
 - **Back up the stock flash first** (`esptool.py read_flash 0 0x200000
   stock.bin`) so you can restore Petkit firmware if ever needed. The optional
-  firmware-verification tests read a private reference dump from an ignored
-  local `petkit-serial-bus/flash dumps/` directory; no stock dump is distributed
-  by this project.
+  firmware-verification tests can use a privately supplied reference dump; no
+  stock dump is distributed by this project. See the [test
+  documentation](tests/README.md).
 
 [nonos-hardware]: https://github.com/wrobelda/petkit-compat-server/blob/main/devices/esp8266/nonos_v2/HARDWARE.md
 [mini-hardware]: https://github.com/wrobelda/petkit-compat-server/blob/main/devices/esp8266/nonos_v2/fresh-element-mini/HARDWARE.md

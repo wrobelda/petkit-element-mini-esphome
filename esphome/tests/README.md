@@ -19,6 +19,7 @@ The component (`components/petkit_feeder/petkit_feeder.cpp`) and
 the exact code that runs on the device.
 
 ## Fixtures
-Tests read the raw captures and firmware dump from the reverse-engineering repo
-at `../../petkit-serial-bus/`. If that directory is absent, the capture/firmware
-tests SKIP (the C++ test is self-contained and always runs).
+Set `PETKIT_SERIAL_BUS_DIR` to a local checkout of
+[`earlynerd/petkit-serial-bus`](https://github.com/earlynerd/petkit-serial-bus)
+to run the optional capture and firmware checks. Without that variable, those
+checks skip; the self-contained C++ tests always run.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build a reproducible map of the stripped ISD91230 Cortex-M0 firmware.
 
-The binary is intentionally not stored in this repository.  The default input
-path points at the ignored earlynerd/petkit-serial-bus checkout.
+The binary is intentionally not stored in this repository. Pass its path
+explicitly on the command line.
 """
 
 from __future__ import annotations
@@ -18,7 +18,6 @@ from capstone import CS_ARCH_ARM, CS_MODE_LITTLE_ENDIAN, CS_MODE_THUMB, Cs
 from capstone.arm import ARM_INS_BL, ARM_INS_LDR, ARM_OP_IMM, ARM_OP_MEM, ARM_REG_PC
 
 
-DEFAULT_IMAGE = Path("petkit-serial-bus/flash dumps/ISD91230.bin")
 EXPECTED_SHA256 = "e8557cd0b4a601977cb53f2b42199c486e83ed7fa5187cc1f7d4f2b8ea20c201"
 
 # Names are deliberately conservative.  A name describes control flow that is
@@ -185,7 +184,7 @@ def classify_address(value: int) -> str | None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("image", nargs="?", type=Path, default=DEFAULT_IMAGE)
+    parser.add_argument("image", type=Path)
     parser.add_argument("--listing", action="store_true", help="include instructions")
     args = parser.parse_args()
 

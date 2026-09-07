@@ -37,7 +37,9 @@ the resulting motor transaction and safety checks.
   consistent with captures). We use one global counter.
 
 ### Confirmed FOUR independent ways (none rely on the README prose)
-1. **Raw logic captures** (`petkit-serial-bus/CSV export/*.csv`): baud ~115200
+1. **Raw logic captures** from
+   [`earlynerd/petkit-serial-bus`](https://github.com/earlynerd/petkit-serial-bus):
+   baud ~115200
    from byte timing; `AA AA` + CRC gate → **350/354 valid frames (98.9%)**.
 2. **CRC math**: CCITT-FALSE reproduces every captured packet's CRC.
 3. **ISD91230 (Cortex-M0) disassembly** — ARM Thumb via capstone:
@@ -328,8 +330,9 @@ instead of `yield()`, so the same validator remains safe in the synchronous
   SDK startup data copy completed. The last observed execution is inside
   Espressif PHY calibration, before Arduino `user_init`.
 - First flash is serial; then OTA. Back up stock flash first
-  (`esptool.py read_flash 0 0x200000 stock.bin`); reference dump is in
-  `petkit-serial-bus/flash dumps/petkitesp8266flash.bin`.
+  (`esptool.py read_flash 0 0x200000 stock.bin`). Set
+  `PETKIT_SERIAL_BUS_DIR` to a private checkout containing the reference dumps
+  when running the optional firmware checks.
 
 ## Stock user1 → user2 reverse OTA: why dev_ota_start never fires
 

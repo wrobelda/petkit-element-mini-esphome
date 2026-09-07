@@ -25,10 +25,10 @@ import os
 import struct
 import sys
 
-HERE = os.path.dirname(__file__)
-DUMPS = os.path.join(HERE, "..", "..", "petkit-serial-bus", "flash dumps")
-M0 = os.path.join(DUMPS, "ISD91230.bin")
-ESP = os.path.join(DUMPS, "petkitesp8266flash.bin")
+REFERENCE_DIR = os.environ.get("PETKIT_SERIAL_BUS_DIR")
+DUMPS = os.path.join(REFERENCE_DIR, "flash dumps") if REFERENCE_DIR else None
+M0 = os.path.join(DUMPS, "ISD91230.bin") if DUMPS else None
+ESP = os.path.join(DUMPS, "petkitesp8266flash.bin") if DUMPS else None
 
 fails = 0
 
@@ -171,6 +171,10 @@ def verify_esp():
 
 
 def main():
+    if REFERENCE_DIR is None:
+        print("SKIP: set PETKIT_SERIAL_BUS_DIR to run firmware checks")
+        return 0
+
     verify_m0()
     verify_esp()
     print()

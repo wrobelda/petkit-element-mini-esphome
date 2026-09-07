@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Regression test: validate the Petkit bus framing/CRC against the raw
-logic-analyzer captures shipped in ../../petkit-serial-bus/CSV export/.
+logic-analyzer captures supplied through PETKIT_SERIAL_BUS_DIR.
 
 These CSVs are UART-decoded byte streams straight off the wire, so a high
 whole-frame CRC pass-rate proves our framing + CRC-16/CCITT-FALSE model matches
@@ -14,9 +14,8 @@ import os
 import sys
 from collections import Counter
 
-CAPTURE_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "petkit-serial-bus", "CSV export"
-)
+REFERENCE_DIR = os.environ.get("PETKIT_SERIAL_BUS_DIR")
+CAPTURE_DIR = os.path.join(REFERENCE_DIR, "CSV export") if REFERENCE_DIR else None
 
 
 def crc16_ccitt_false(data, crc=0xFFFF):
@@ -154,6 +153,10 @@ def main():
     assert crc16_ccitt_false(bytes.fromhex("AAAA1202FF00000108EC023F08710220 24C5".replace(" ", ""))) == 0
     assert crc16_ccitt_false(bytes.fromhex("AAAA070101599A")) != 0  # corrupted -> nonzero
     print("ok:   known-answer CRC vectors")
+
+    if CAPTURE_DIR is None:
+        print("SKIP: set PETKIT_SERIAL_BUS_DIR to run capture checks")
+        return 0
 
     paths = sorted(glob.glob(os.path.join(CAPTURE_DIR, "*.csv")))
     if not paths:
