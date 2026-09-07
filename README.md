@@ -22,7 +22,9 @@ approximately 5 g. Actual weight varies with the food and hopper level.
 
 The wireless installation starts with Petkit's stock firmware, installs a small
 ESPHome transition image, then installs the complete feeder firmware. It does
-not require opening the feeder. Read the [hardware and serial
+not require opening the feeder. A power failure while the final bootloader
+sector is being written can still require serial recovery, which means opening
+the feeder. Read the [hardware and serial
 connections][mini-hardware] and [recovery procedure][nonos-hardware] before
 starting; preserving an exact stock backup requires serial access.
 
