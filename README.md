@@ -32,7 +32,8 @@ The guided installer checks out the two supporting projects, creates the build
 environment, asks for the Wi-Fi and recovery credentials, builds both images,
 runs the local Petkit API, provisions the feeder, saves a recovery image, and
 uploads the final firmware. It pauses while you put the feeder in setup mode
-and while you reconnect the computer to your normal Wi-Fi network.
+and while you reconnect the computer to your normal Wi-Fi network, then waits
+until the final ESPHome API is reachable.
 
 ```sh
 git clone https://github.com/wrobelda/petkit-element-mini-esphome.git

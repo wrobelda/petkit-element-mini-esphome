@@ -257,6 +257,11 @@ def main() -> None:
         default="petkit-kickstart.local",
         help="Kickstart hostname or IP address",
     )
+    parser.add_argument(
+        "--final-host",
+        default="petkit-feeder.local",
+        help="final ESPHome hostname or IP address",
+    )
     args = parser.parse_args()
 
     project = Path(__file__).resolve().parent
@@ -411,7 +416,12 @@ def main() -> None:
             password=values["kickstart_web_password"],
             cwd=project,
         )
-        print(f"\nMigration accepted. Keep the recovery image at {recovery}.")
+        print("\nMigration image written; waiting for the final ESPHome API.")
+        final_ip = wait_for_host(args.final_host, 6053)
+        print(
+            f"Final ESPHome firmware is reachable at {final_ip}. "
+            f"Keep the recovery image at {recovery}."
+        )
     finally:
         server.terminate()
         try:
