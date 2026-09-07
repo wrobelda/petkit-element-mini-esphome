@@ -128,8 +128,9 @@ see [KICKSTART.md](KICKSTART.md).
 Serial flashing remains the recovery path and a direct installation option.
 After the final image boots, subsequent updates use ordinary ESPHome OTA.
 
-Verified: `esphome config` passes and the encrypted-API firmware compiles for
-`esp8266` (about 45% flash and 42% RAM on the 2 MB module).
+Verified with ESPHome 2026.9.0b1: `esphome config` passes and the encrypted-API
+firmware compiles for `esp8266` using 48.2% flash and 46.9% RAM on the 2 MB
+module.
 
 ### Flashing notes (important)
 
