@@ -95,6 +95,9 @@ api:
 
 ota:
   - platform: esphome
+    # ESPHome 2026.9 reuses the native API key for encrypted and authenticated
+    # firmware updates, so no second OTA credential is needed.
+    encryption:
 
 wifi:
   ssid: !secret wifi_ssid
