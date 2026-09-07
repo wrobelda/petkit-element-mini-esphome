@@ -77,10 +77,13 @@ def read_simple_secrets(path: Path) -> dict[str, str]:
             continue
         key, raw_value = line.split(":", 1)
         raw_value = raw_value.strip()
-        try:
-            value = json.loads(raw_value)
-        except json.JSONDecodeError:
-            value = raw_value
+        if len(raw_value) >= 2 and raw_value.startswith("'") and raw_value.endswith("'"):
+            value = raw_value[1:-1].replace("''", "'")
+        else:
+            try:
+                value = json.loads(raw_value)
+            except json.JSONDecodeError:
+                value = raw_value
         if isinstance(value, str):
             values[key.strip()] = value
     return values
@@ -106,6 +109,15 @@ def write_secrets(path: Path) -> dict[str, str]:
     )
     path.chmod(0o600)
     return values
+
+
+def load_or_create_secrets(path: Path) -> dict[str, str]:
+    if path.exists():
+        values = read_simple_secrets(path)
+        path.chmod(0o600)
+        print(f"Using existing {path}")
+        return values
+    return write_secrets(path)
 
 
 def detect_timezone() -> str:
@@ -187,11 +199,7 @@ def main() -> None:
     run([str(python), "-m", "pip", "install", "esphome==2026.9.0b1"], cwd=project)
 
     secrets_path = project / "esphome" / "secrets.yaml"
-    if secrets_path.exists():
-        values = read_simple_secrets(secrets_path)
-        print(f"Using existing {secrets_path}")
-    else:
-        values = write_secrets(secrets_path)
+    values = load_or_create_secrets(secrets_path)
     required = {
         "wifi_ssid",
         "wifi_password",
