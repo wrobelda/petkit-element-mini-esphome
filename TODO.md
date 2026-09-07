@@ -32,10 +32,9 @@
   Keep device layout values in per-device YAML, remove local checkout paths
   from published examples, and do not retain compatibility aliases for names
   that have never been released.
-- Choose and add a repository license before publication. Publish this
-  repository, pin the installer's compatibility-server and Kickstart
-  dependencies to reviewed tags or commits, pin the staged device page's
-  component source to a stable tag or commit, add publishable product/board
+- Publish this repository. Pin the installer's compatibility-server and
+  Kickstart dependencies to reviewed tags or commits, pin the staged device
+  page's component source to a stable tag or commit, add publishable board
   photographs, and submit
   `upstream/devices.esphome.io/petkit-fresh-element-mini`. The page and YAML
   already pass the current devices.esphome.io validators.
