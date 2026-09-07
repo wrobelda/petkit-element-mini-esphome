@@ -57,7 +57,7 @@ git clone https://github.com/wrobelda/esphome-kickstart.git
 
 #### 2. Configure and build both ESPHome images
 
-Create a virtual environment, install a supported ESPHome release, and create
+Create a virtual environment, install the hardware-tested ESPHome beta, and create
 the private secrets file:
 
 ```sh

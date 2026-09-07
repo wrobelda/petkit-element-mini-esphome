@@ -114,7 +114,7 @@ behavior.
 ## Build and install
 
 ```sh
-pip install esphome
+pip install 'esphome==2026.9.0b1'
 esphome compile petkit-feeder.yaml
 ```
 
