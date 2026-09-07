@@ -1,0 +1,107 @@
+# Minimal transition firmware for installing ESPHome through the stock Petkit
+# OTA mechanism. This image must not operate the feeder hardware. In
+# particular, it does not configure GPIO1/GPIO3 (the motor-controller UART),
+# GPIO13 (manual feed), or GPIO15 (active-low motor-controller reset).
+
+substitutions:
+  name: petkit-kickstart
+  friendly_name: Petkit Kickstart
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  project:
+    name: petkit.fresh-element-mini-kickstart
+    version: "0.1"
+
+esp8266:
+  board: esp_wroom_02
+  restore_from_flash: false
+
+# Keep normal diagnostics off UART0 because GPIO1/GPIO3 connect to the feeder's
+# motor-controller bus. ESP8266 UART1 is transmit-only on GPIO2.
+logger:
+  baud_rate: 115200
+  hardware_uart: UART1
+  level: INFO
+
+external_components:
+  - source:
+      type: local
+      path: !env_var KICKSTART_COMPONENTS_PATH
+    components:
+      - hub_api
+      - esp8266_nonos_v2_slot_control
+      - esp8266_nonos_v2_to_eboot_v1
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  reboot_timeout: 0s
+  ap:
+    ssid: "Petkit Kickstart"
+    password: !secret fallback_ap_password
+
+# The captive portal stores the selected station credentials in flash.
+captive_portal:
+
+web_server:
+  port: 80
+  local: true
+  ota: false
+  auth:
+    type: digest
+    username: !secret kickstart_web_username
+    password: !secret kickstart_web_password
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: !secret api_key
+
+esp8266_nonos_v2_to_eboot_v1:
+  # Link the bridge for the flash mapping expected by the stock bootloader.
+  irom_vma: 0x40201010
+  irom_size: 0x0FEFF0
+  flash_size: 0x200000
+  slots:
+    - offset: 0x001000
+      size: 0x100000
+    - offset: 0x101000
+      # Stop before the PHY-data sector at 0x1FB000.
+      size: 0x0FA000
+
+hub_api:
+
+esp8266_nonos_v2_slot_control:
+  # A lower-slot bridge cannot safely replace the lower flash layout while it
+  # is executing there, so validate and copy it to the upper slot at boot.
+  auto_copy_lower_to_upper_slot: true
+
+button:
+  - platform: restart
+    name: Restart
+    entity_category: diagnostic
+
+debug:
+  update_interval: 10s
+
+sensor:
+  - platform: uptime
+    name: Uptime
+    entity_category: diagnostic
+  - platform: debug
+    free:
+      name: Free heap
+    loop_time:
+      name: Loop time
+
+text_sensor:
+  - platform: debug
+    device:
+      name: Device information
+    reset_reason:
+      name: Reset reason
+  - platform: wifi_info
+    ip_address:
+      name: IP address
