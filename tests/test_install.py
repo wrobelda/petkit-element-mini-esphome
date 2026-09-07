@@ -159,5 +159,22 @@ class RecoveryDownloadTest(unittest.TestCase):
 
             self.assertFalse(path.exists())
 
+
+class BuildArtifactTest(unittest.TestCase):
+    def test_accepts_nonempty_regular_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "firmware.bin"
+            path.write_bytes(b"firmware")
+            install.require_build_artifact(path, "test image")
+
+    def test_rejects_missing_or_empty_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "firmware.bin"
+            with self.assertRaisesRegex(RuntimeError, "test image was not created"):
+                install.require_build_artifact(path, "test image")
+            path.touch()
+            with self.assertRaisesRegex(RuntimeError, "test image was not created"):
+                install.require_build_artifact(path, "test image")
+
 if __name__ == "__main__":
     unittest.main()

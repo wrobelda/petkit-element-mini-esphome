@@ -183,6 +183,11 @@ def wait_for_host(host: str, port: int, timeout: int = 180) -> str:
     raise RuntimeError(f"{host}:{port} did not become reachable within {timeout} seconds")
 
 
+def require_build_artifact(path: Path, description: str) -> None:
+    if not path.is_file() or path.stat().st_size == 0:
+        raise RuntimeError(f"{description} was not created at {path}")
+
+
 def github_repository(url: str) -> str | None:
     if url.startswith("git@github.com:"):
         path = url.removeprefix("git@github.com:")
@@ -306,6 +311,8 @@ def main() -> None:
         project
         / "esphome/.esphome/build/petkit-feeder/.pioenvs/petkit-feeder/firmware.factory.bin"
     )
+    require_build_artifact(transition_elf, "Kickstart ELF")
+    require_build_artifact(factory, "final ESPHome factory image")
     run(
         [
             str(python),
