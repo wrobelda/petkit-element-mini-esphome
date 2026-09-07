@@ -8,10 +8,13 @@ directly. The bridge boots in the stock flash layout and provides recovery,
 full-flash download, and a bootloader-last installer for the final ESPHome
 factory image.
 
-This follows the staged-installation design of
-[ESPHome Kickstart](https://github.com/libretiny-eu/esphome-kickstart), including
-its fallback access point and recovery web interface. The bridge has
-booted successfully on the feeder with the current ESP8266 Arduino core 3.1.2.
+This follows the staged-installation design of the canonical
+[ESPHome Kickstart](https://github.com/libretiny-eu/esphome-kickstart) project,
+including its fallback access point and recovery web interface. The generic
+migration components currently live in the tested
+[`wrobelda/esphome-kickstart`](https://github.com/wrobelda/esphome-kickstart)
+fork while they are prepared for upstream review. The bridge has booted
+successfully on the feeder with the current ESP8266 Arduino core 3.1.2.
 
 The bridge deliberately has no `uart`, `petkit_feeder`, `pinscan`, GPIO binary
 sensors, or GPIO buttons, so it cannot operate the feeder. UART0 connects to
