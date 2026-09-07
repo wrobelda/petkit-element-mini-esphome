@@ -1,7 +1,7 @@
 # Petkit Element Mini ESPHome
 
 This project replaces the cloud-dependent firmware on the Petkit Fresh Element
-Mini pet feeder with ESPHome. It keeps the feeder's original motor controller,
+Mini pet feeder with ESPHome. It keeps the feeder's ISD91230 motor controller,
 motor wiring, sensors, buttons, indicators, beeper, and battery-backed clock.
 
 Only the Fresh Element Mini P530 hardware described here is currently
