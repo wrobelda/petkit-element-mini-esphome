@@ -6,34 +6,76 @@
 # ---- Wiring on the ESP8266 (from petkit-serial-bus reverse engineering) ----
 #   GPIO1  U0TXD  -> ISD91230 RX   (bus TX)
 #   GPIO3  U0RXD  <- ISD91230 TX   (bus RX)
-#   GPIO15        -> ISD91230 reset (low = running; must be low at boot anyway)
+#   GPIO15        -> ISD91230 RESETB (active-low; 3.3 V while running)
 #   GPIO0         -> "wifi reset" pushbutton (also flash/boot pin)
 #   GPIO13        -> "manual feed" pushbutton
-#   GPIO5  SDA / GPIO14 SCL -> PCF8563 RTC (optional, not used here)
+#   GPIO5  SDA / GPIO14 SCL -> battery-backed PCF8563 RTC
 #   GPIO16        -> deep-sleep wake (unused here)
 #
 # ---- Flashing notes ----
-# GPIO1/GPIO3 are shared with the M0. Flash the ESP8266 via the exposed debug
-# header; hold the M0 in reset (GPIO15 high) or power it down while flashing so
-# it does not talk on the bus. After the first serial flash, use OTA.
+# GPIO1/GPIO3 are shared with the M0. The physical feeder accepted an esptool
+# stub and verified slot write through TX0/RX0/GND without M0 isolation. Do not
+# drive GPIO15 high during ESP8266 reset because it is also a required low boot
+# strap. See the Fresh Element Mini recovery guide in the separate
+# petkit-compat-server repository for the verified sequence.
 
 substitutions:
   name: petkit-feeder
   friendly_name: Petkit Feeder
 
+globals:
+  # Local calendar date of the last run of each schedule slot. Persisting this
+  # prevents a repeated local hour at the end of daylight-saving time from
+  # dispensing twice.
+  - id: schedule_last_run
+    type: std::array<uint32_t, 4>
+    restore_value: true
+    initial_value: '{0, 0, 0, 0}'
+
 esphome:
   name: ${name}
   friendly_name: ${friendly_name}
+  min_version: 2026.9.0b1
+  project:
+    name: petkit.fresh-element-mini
+    version: "0.1"
+  on_boot:
+    # Restore the system clock without depending on Wi-Fi, Home Assistant, or
+    # Internet access. The PCF8563 is backed by the feeder's internal battery.
+    - priority: 200
+      then:
+        - pcf8563.read_time:
+            id: hardware_time
+        - lambda: |-
+            auto now = id(hardware_time).now();
+            if (now.is_valid()) {
+              ESP_LOGI("rtc", "Restored system time from PCF8563: %s",
+                       now.strftime("%Y-%m-%d %H:%M:%S").c_str());
+            } else {
+              ESP_LOGW("rtc", "PCF8563 did not provide a valid time");
+            }
+    - priority: -100
+      then:
+        # The M0 setup starts with the normal connecting indication. Honor a
+        # restored user preference once all components have initialized.
+        - delay: 1s
+        - if:
+            condition:
+              switch.is_off: wifi_indicator
+            then:
+              - lambda: 'id(feeder).blink_upper(0, 1000, 0xFFFF);'
 
 esp8266:
   # ESP-WROOM-02, 2 MB flash (the stock module). Gives room for OTA.
   board: esp_wroom_02
   restore_from_flash: true
 
-# The bus lives on UART0 (GPIO1/GPIO3), so serial logging MUST be disabled to
-# avoid corrupting it. Logs are still available over the network / HA.
+# The feeder bus occupies UART0 (board TX0/RX0, GPIO1/GPIO3). The board TX1
+# pad connects to the transmit-only UART1 on GPIO2, so logs on UART1 cannot
+# transmit into the motor-controller bus.
 logger:
-  baud_rate: 0
+  baud_rate: 115200
+  hardware_uart: UART1
   level: INFO
 
 # Pull the external component from the local components/ folder in this repo.
@@ -44,9 +86,12 @@ external_components:
 
 api:
   # Feed will keep working with no network, but expose it to HA when present.
-  # Optional: uncomment to require an encryption key.
-  # encryption:
-  #   key: !secret api_key
+  # Do not reboot this offline-first appliance when Home Assistant is absent.
+  reboot_timeout: 0s
+  # Use the same encrypted API identity as the migration bridge so Home
+  # Assistant can reconnect after the final firmware replaces Kickstart.
+  encryption:
+    key: !secret api_key
 
 ota:
   - platform: esphome
@@ -58,10 +103,157 @@ wifi:
   # default reboot_timeout (15 min) would power-cycle the feeder during an
   # outage — exactly when it must keep honoring the manual-feed button.
   reboot_timeout: 0s
+  # Stock blinks the upper indicator while connecting and leaves it solid when
+  # the feeder is online.
+  on_connect:
+    - if:
+        condition:
+          switch.is_on: wifi_indicator
+        then:
+          - lambda: 'id(feeder).blink_upper(1000, 0, 0xFFFF);'
+        else:
+          - lambda: 'id(feeder).blink_upper(0, 1000, 0xFFFF);'
+  on_disconnect:
+    - if:
+        condition:
+          switch.is_on: wifi_indicator
+        then:
+          - lambda: 'id(feeder).blink_upper(1000, 1000, 0xFFFF);'
+        else:
+          - lambda: 'id(feeder).blink_upper(0, 1000, 0xFFFF);'
   ap:
     ssid: "${friendly_name} Fallback"
+    password: !secret fallback_ap_password
 
 captive_portal:
+
+# The RTC keeps the feeder's clock through an outage. Home Assistant corrects
+# it whenever the native API reconnects, but boot-time timekeeping does not
+# depend on the network being available.
+i2c:
+  id: rtc_bus
+  sda: GPIO5
+  scl: GPIO14
+  scan: false
+
+time:
+  - platform: pcf8563
+    id: hardware_time
+    i2c_id: rtc_bus
+    address: 0x51
+    update_interval: never
+  - platform: homeassistant
+    id: homeassistant_time
+    on_time_sync:
+      then:
+        - pcf8563.write_time:
+            id: hardware_time
+
+# Each time is editable from Home Assistant and stored on the feeder. The
+# trigger uses the system clock restored from the PCF8563, so schedules keep
+# working without Home Assistant, Wi-Fi, or Internet access.
+datetime:
+  - platform: template
+    id: schedule_1_time
+    type: time
+    name: "Schedule 1 time"
+    icon: "mdi:clock-outline"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "08:00:00"
+    time_id: hardware_time
+    on_time:
+      - if:
+          condition:
+            switch.is_on: schedule_1_enabled
+          then:
+            - script.execute:
+                id: run_scheduled_feed
+                slot: 0
+                servings: !lambda 'return id(schedule_1_amount).state / 5;'
+
+  - platform: template
+    id: schedule_2_time
+    type: time
+    name: "Schedule 2 time"
+    icon: "mdi:clock-outline"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "12:00:00"
+    time_id: hardware_time
+    on_time:
+      - if:
+          condition:
+            switch.is_on: schedule_2_enabled
+          then:
+            - script.execute:
+                id: run_scheduled_feed
+                slot: 1
+                servings: !lambda 'return id(schedule_2_amount).state / 5;'
+
+  - platform: template
+    id: schedule_3_time
+    type: time
+    name: "Schedule 3 time"
+    icon: "mdi:clock-outline"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "18:00:00"
+    time_id: hardware_time
+    on_time:
+      - if:
+          condition:
+            switch.is_on: schedule_3_enabled
+          then:
+            - script.execute:
+                id: run_scheduled_feed
+                slot: 2
+                servings: !lambda 'return id(schedule_3_amount).state / 5;'
+
+  - platform: template
+    id: schedule_4_time
+    type: time
+    name: "Schedule 4 time"
+    icon: "mdi:clock-outline"
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    initial_value: "22:00:00"
+    time_id: hardware_time
+    on_time:
+      - if:
+          condition:
+            switch.is_on: schedule_4_enabled
+          then:
+            - script.execute:
+                id: run_scheduled_feed
+                slot: 3
+                servings: !lambda 'return id(schedule_4_amount).state / 5;'
+
+script:
+  - id: run_scheduled_feed
+    parameters:
+      slot: int
+      servings: int
+    then:
+      - lambda: |-
+          auto now = id(hardware_time).now();
+          if (!now.is_valid() || slot < 0 || slot >= 4 || servings < 1)
+            return;
+          const uint32_t date = now.year * 10000U + now.month * 100U + now.day_of_month;
+          if (id(schedule_last_run)[slot] == date) {
+            ESP_LOGW("schedule", "Schedule %d already ran on %04u-%02u-%02u", slot + 1,
+                     now.year, now.month, now.day_of_month);
+            return;
+          }
+          // Consume this occurrence before starting the transaction. If the
+          // feeder is busy, the schedule is skipped instead of running late.
+          id(schedule_last_run)[slot] = date;
+          ESP_LOGI("schedule", "Running schedule %d: %d serving(s)", slot + 1, servings);
+          id(feeder).feed(static_cast<uint8_t>(servings));
 
 # --- UART to the ISD91230 motor/sensor co-processor ---
 uart:
@@ -75,31 +267,31 @@ uart:
 petkit_feeder:
   id: feeder
   uart_id: bus
-  # reset_pin drives GPIO15 = the ISD91230 reset line. Polarity (active-high,
-  # low = running) is REASONED from the ESP8266 boot strap requiring GPIO15 low
-  # while the M0 is observed running from power-on, but NOT verified on a meter.
-  # Getting it wrong holds the M0 in reset (feeder dead). Left commented out;
-  # enable only once you have confirmed the polarity on your unit.
-  # reset_pin:
-  #   number: GPIO15
-  #   inverted: false
+  # GPIO15 measures 3.3 V while the M0 is running. The inverted output makes
+  # the component's logical reset pulse drive RESETB low, then release it high.
+  reset_pin:
+    number: GPIO15
+    inverted: true
   send_init_sequence: true
   update_interval: 10s
-  # Diagnostic status fields. Names reflect what is actually evidenced; the raw
-  # pairs have UNCONFIRMED units/scaling (see README). food/door byte meanings
-  # and polarity are from the earlynerd notes and not verified here.
-  food_ok:
-    name: "Food level (byte0 != 0)"
-  door_flag:
-    name: "Door status flag (byte1)"
-  adapter_raw_1:
-    name: "Adapter field 1 (raw)"
-  adapter_raw_2:
-    name: "Adapter field 2 (raw)"
-  battery_raw_1:
-    name: "Battery field 1 (raw)"
-  battery_raw_2:
-    name: "Battery field 2 (raw)"
+  # M0 digital inputs. Their physical assignments are established from the M0
+  # firmware, while ON/OFF remains the raw electrical level.
+  dispenser_door_sensor:
+    name: "Dispenser door feedback (raw)"
+  food_detected:
+    name: "Food detected"
+  dispenser_wheel_sensor:
+    name: "Dispenser wheel feedback (raw)"
+  adapter_voltage:
+    name: "Adapter voltage"
+  battery_voltage:
+    name: "Battery voltage"
+  adapter_adc:
+    name: "Adapter ADC"
+  battery_adc:
+    name: "Battery ADC"
+  power_source:
+    name: "Power source"
 
 # --- Physical buttons on the feeder ---
 binary_sensor:
@@ -107,19 +299,21 @@ binary_sensor:
     name: "Manual feed button"
     pin:
       number: GPIO13
-      inverted: true          # pressed = low
+      inverted: true
       mode:
         input: true
         pullup: true
     filters:
       - delayed_on: 30ms
+    # Stock configures GPIO13 as an input with its internal pull-up enabled.
+    # Hardware measures about 3.2 V released and 0 V pressed.
     on_press:
-      # Local, cloud-free feed the moment the button is pressed.
-      then:
-        - lambda: 'id(feeder).feed((uint8_t) id(feed_steps).state);'
+      - lambda: 'id(feeder).manual_feed_start();'
+    on_release:
+      - lambda: 'id(feeder).manual_feed_stop();'
 
   - platform: gpio
-    name: "Wifi/reset button"
+    name: "Wi-Fi reset button"
     pin:
       number: GPIO0
       inverted: true
@@ -129,19 +323,115 @@ binary_sensor:
     filters:
       - delayed_on: 30ms
 
-# How many raw dispense STEPS one feed sends. A "step" is one captured stock
-# dispense command (00 02 01 50); its mapping to actual food quantity is NOT
-# established (see README/AGENTS.md) — calibrate on hardware.
+# The Petkit app exposes the Wi-Fi indicator as a user setting. Disabling this
+# switch sends the stock mode-0 timing.
+switch:
+  - platform: template
+    id: wifi_indicator
+    name: "Wi-Fi indicator"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    turn_on_action:
+      - if:
+          condition:
+            wifi.connected:
+          then:
+            - lambda: 'id(feeder).blink_upper(1000, 0, 0xFFFF);'
+          else:
+            - lambda: 'id(feeder).blink_upper(1000, 1000, 0xFFFF);'
+    turn_off_action:
+      - lambda: 'id(feeder).blink_upper(0, 1000, 0xFFFF);'
+
+  - platform: template
+    id: schedule_1_enabled
+    name: "Schedule 1 enabled"
+    icon: "mdi:calendar-check"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    id: schedule_2_enabled
+    name: "Schedule 2 enabled"
+    icon: "mdi:calendar-check"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    id: schedule_3_enabled
+    name: "Schedule 3 enabled"
+    icon: "mdi:calendar-check"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    id: schedule_4_enabled
+    name: "Schedule 4 enabled"
+    icon: "mdi:calendar-check"
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+
+# Scheduled amounts follow the Petkit app's 5 g increments. One 5 g increment
+# selects one counted M0 wheel cycle; the actual weight varies with the food.
 number:
   - platform: template
-    id: feed_steps
-    name: "Dispense steps (raw, uncalibrated)"
+    id: schedule_1_amount
+    name: "Schedule 1 amount"
+    icon: "mdi:weight-gram"
+    entity_category: config
+    unit_of_measurement: "g"
     optimistic: true
     restore_value: true
-    initial_value: 2
-    min_value: 1
-    max_value: 12
-    step: 1
+    initial_value: 5
+    min_value: 5
+    max_value: 100
+    step: 5
+    mode: box
+
+  - platform: template
+    id: schedule_2_amount
+    name: "Schedule 2 amount"
+    icon: "mdi:weight-gram"
+    entity_category: config
+    unit_of_measurement: "g"
+    optimistic: true
+    restore_value: true
+    initial_value: 5
+    min_value: 5
+    max_value: 100
+    step: 5
+    mode: box
+
+  - platform: template
+    id: schedule_3_amount
+    name: "Schedule 3 amount"
+    icon: "mdi:weight-gram"
+    entity_category: config
+    unit_of_measurement: "g"
+    optimistic: true
+    restore_value: true
+    initial_value: 5
+    min_value: 5
+    max_value: 100
+    step: 5
+    mode: box
+
+  - platform: template
+    id: schedule_4_amount
+    name: "Schedule 4 amount"
+    icon: "mdi:weight-gram"
+    entity_category: config
+    unit_of_measurement: "g"
+    optimistic: true
+    restore_value: true
+    initial_value: 5
+    min_value: 5
+    max_value: 100
+    step: 5
     mode: box
 
 # --- Controls exposed to Home Assistant ---
@@ -150,11 +440,8 @@ button:
     name: "Feed now"
     icon: "mdi:bowl-mix"
     on_press:
-      - lambda: 'id(feeder).feed((uint8_t) id(feed_steps).state);'
-
-  - platform: template
-    name: "Dispense 1 step"
-    on_press:
+      # One serving is one counted M0 dispenser cycle. Petkit specifies the
+      # nominal amount as approximately 5 g; actual weight varies with food.
       - lambda: 'id(feeder).feed(1);'
 
   - platform: template
@@ -183,8 +470,23 @@ button:
       - lambda: 'id(feeder).get_status();'
 
   - platform: template
-    name: "Reset motor controller"
+    name: "Restart motor controller"
     entity_category: diagnostic
-    icon: "mdi:restart-alert"
     on_press:
       - lambda: 'id(feeder).reset_mcu();'
+      # M0 reset replays the stock connecting indication. Wi-Fi remains up, so
+      # restore the current indicator state after the M0 handshake finishes.
+      - delay: 4s
+      - if:
+          condition:
+            switch.is_on: wifi_indicator
+          then:
+            - if:
+                condition:
+                  wifi.connected:
+                then:
+                  - lambda: 'id(feeder).blink_upper(1000, 0, 0xFFFF);'
+                else:
+                  - lambda: 'id(feeder).blink_upper(1000, 1000, 0xFFFF);'
+          else:
+            - lambda: 'id(feeder).blink_upper(0, 1000, 0xFFFF);'

@@ -73,12 +73,13 @@ inline uint8_t build_frame(uint8_t *out, uint8_t type, uint8_t seq,
 // Decoded status (type 0x02) payload.
 struct Status {
   bool valid;
-  bool food_ok;      // payload[0] != 0
-  bool door_fault;   // payload[1] != 0
+  bool dispenser_door_sensor;  // payload[0] = M0 PB8, used by door motion
+  bool food_detected;    // payload[1] = M0 PB6, optical food-level threshold
+  bool dispenser_wheel_sensor;  // payload[2] = M0 PB7, used by wheel motion
   uint16_t adapter_adc;
-  uint16_t adapter_mv;
+  uint16_t adapter_centivolts;
   uint16_t battery_adc;
-  uint16_t battery_mv;
+  uint16_t battery_centivolts;
 };
 
 // Parse a validated status frame. Requires >= 11 payload bytes for voltages.
@@ -90,16 +91,40 @@ inline Status parse_status(const uint8_t *frame, uint8_t len) {
   const uint8_t plen = len - OVERHEAD;
   if (plen < 3)
     return s;
-  s.food_ok = p[0] != 0x00;
-  s.door_fault = p[1] != 0x00;
+  s.dispenser_door_sensor = p[0] != 0x00;
+  s.food_detected = p[1] != 0x00;
+  s.dispenser_wheel_sensor = p[2] != 0x00;
   if (plen >= 11) {
     s.adapter_adc = (p[3] << 8) | p[4];
-    s.adapter_mv = (p[5] << 8) | p[6];
+    s.adapter_centivolts = (p[5] << 8) | p[6];
     s.battery_adc = (p[7] << 8) | p[8];
-    s.battery_mv = (p[9] << 8) | p[10];
+    s.battery_centivolts = (p[9] << 8) | p[10];
   }
   s.valid = true;
   return s;
+}
+
+// Decoded type-0x0C result. The M0 firmware builds both progress replies and
+// motion completions with this layout. Byte 0 is its wheel/sensor count and
+// byte 1 is one when the counted motion has finished. The last three bytes are
+// completion measurements whose units are not established.
+struct DispenseResult {
+  bool valid;
+  uint8_t wheel_count;
+  bool complete;
+  uint8_t detail[3];
+};
+
+inline DispenseResult parse_dispense_result(const uint8_t *frame, uint8_t len) {
+  DispenseResult result{};
+  if (!frame_is_valid(frame, len) || frame[3] != 0x0C || len - OVERHEAD != 5)
+    return result;
+  result.wheel_count = frame[5];
+  result.complete = frame[6] == 1;
+  for (uint8_t i = 0; i < 3; i++)
+    result.detail[i] = frame[7 + i];
+  result.valid = true;
+  return result;
 }
 
 }  // namespace protocol

@@ -71,6 +71,47 @@ def verify_m0():
     }
     for off, (b, desc) in ins.items():
         check(d[off : off + len(b)] == b, f"M0 @0x{off:05X}: {desc}")
+
+    # Type 0x0B command handler. Payload byte 1 selects counted motion (1) or
+    # a progress query (2). Counted motion stores payload byte 0 as the cycle
+    # counter; the motor routine decrements it after a sensor transition unless
+    # it is 0xFF, which is the free-running mode used by stock's first-feed path.
+    motion = {
+        0x0BA2: (b"\xa0\x79", "read payload byte 1"),
+        0x0BA4: (b"\x01\x28", "select counted-motion branch"),
+        0x0BB2: (b"\x60\x79", "read payload byte 0 cycle count"),
+        0x0BC6: (b"\xa0\x79", "read payload byte 1 for query branch"),
+        0x0BC8: (b"\x02\x28", "select progress-query branch"),
+        0x2532: (b"\xff\x28", "0xFF cycle count is free-running"),
+        0x253A: (b"\x40\x1e", "decrement counted wheel cycles"),
+        0x15FC: (b"\x01\xf0\x92\xf8", "query path calls type-0x0C builder"),
+    }
+    for off, (b, desc) in motion.items():
+        check(d[off : off + len(b)] == b, f"M0 @0x{off:05X}: {desc}")
+
+    # The type-0x02 status builder exposes the three sampled GPIOB inputs in
+    # PB8, PB6, PB7 order. PB8 is read by the type-0x07 outlet state machine,
+    # while PB7 is read by the type-0x0B dispenser state machine. PB6 is the
+    # remaining optical food-level channel, sampled after PB5 excitation.
+    check(struct.unpack_from("<III", d, 0x28A0) ==
+          (0x200000F7, 0x200000F5, 0x200000F9),
+          "M0 type-0x02 digital inputs are PB8, PB6, PB7")
+    check(d[0x1E00:0x1E2C] == bytes.fromhex(
+              "124800694021084080090c4908700f48006980210840c0090d4908700b480069ff2101310840000a06490870"),
+          "M0 samples PB6, PB7, and PB8 after sensor excitation")
+    check(d[0x202E:0x2032] == b"\xff\xf7\x9f\xfc",
+          "M0 outlet state machine reads PB8")
+    check(d[0x2478:0x247C] == b"\xff\xf7\x84\xfa",
+          "M0 dispenser state machine reads PB7")
+
+    # The type-0x0C builder reads the wheel/sensor count from 0x20000050 and
+    # reports completion when the remaining cycle count at 0x2000001F is zero.
+    check(struct.unpack_from("<I", d, 0x2778)[0] == 0x20000050,
+          "M0 type-0x0C byte 0 reads wheel count @ 0x20000050")
+    check(struct.unpack_from("<I", d, 0x277C)[0] == 0x2000001F,
+          "M0 type-0x0C byte 1 reads remaining cycle count @ 0x2000001F")
+    check(d[0x2742:0x274A] == b"\x00\x78\x00\x28\x01\xd1\x01\x21",
+          "M0 type-0x0C completion is one when remaining count is zero")
     seed = struct.unpack_from("<I", d, 0x36E8)[0]
     check(seed == 0x0000FFFF, "M0 CRC seed literal 0xFFFF @ 0x36E8")
     # Prove the M0's own CRC validates captured packets.

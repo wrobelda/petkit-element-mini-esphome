@@ -37,13 +37,107 @@ def load_bytes(path):
     return out
 
 
+def load_timed_frames(path):
+    """Return CRC-valid frames per analyzer channel, retaining frame time."""
+    streams = {}
+    with open(path) as f:
+        for row in csv.DictReader(f):
+            if not row.get("data"):
+                continue
+            streams.setdefault(row["name"], []).append(
+                (float(row["start_time"]), int(row["data"], 16))
+            )
+
+    result = {}
+    for name, stream in streams.items():
+        frames, i = [], 0
+        while i < len(stream) - 2:
+            if stream[i][1] == 0xAA and stream[i + 1][1] == 0xAA:
+                length = stream[i + 2][1]
+                if 7 <= length <= 19 and i + length <= len(stream):
+                    frame = bytes(value for _, value in stream[i : i + length])
+                    if crc16_ccitt_false(frame) == 0:
+                        frames.append((stream[i][0], frame))
+                        i += length
+                        continue
+            i += 1
+        result[name] = frames
+    return result
+
+
+def assert_stock_feed_traces():
+    """Pin the dispense exchanges to the original stock UART captures.
+
+    Async Serial [1] is ESP8266 -> M0 and Async Serial is M0 -> ESP8266.
+    The captures do not record the app-requested amount, so these assertions
+    intentionally establish packet behavior without assigning gram values.
+    """
+    capture_dir = os.path.abspath(CAPTURE_DIR)
+    trace2 = load_timed_frames(os.path.join(capture_dir, "petkit02.csv"))
+    trace3 = load_timed_frames(os.path.join(capture_dir, "petkit03.csv"))
+
+    def frames(trace, channel, packet_type):
+        return [(when, frame[4], frame[5:-2]) for when, frame in trace[channel]
+                if frame[3] == packet_type]
+
+    tx2 = frames(trace2, "Async Serial [1]", 0x0B)
+    done2 = frames(trace2, "Async Serial", 0x0C)
+    assert [payload for _, _, payload in tx2] == [
+        bytes.fromhex("ff010150"),
+        bytes.fromhex("01010150"),
+        *([bytes.fromhex("00020150")] * 7),
+    ]
+    assert [(seq, payload) for _, seq, payload in done2] == [
+        *[(seq, bytes(5)) for seq in range(3, 10)],
+        (2, bytes.fromhex("0001030342")),
+    ]
+    # Stock paces the seven follow-up commands at about one-second intervals.
+    followup_times = [when for when, _, payload in tx2
+                      if payload == bytes.fromhex("00020150")]
+    assert all(0.9 <= later - earlier <= 1.1
+               for earlier, later in zip(followup_times, followup_times[1:]))
+
+    tx3 = frames(trace3, "Async Serial [1]", 0x0B)
+    done3 = frames(trace3, "Async Serial", 0x0C)
+    assert [payload for _, _, payload in tx3] == [
+        bytes.fromhex("ff010150"),
+        bytes.fromhex("00020150"),
+        bytes.fromhex("01010150"),
+        bytes.fromhex("00020150"),
+        bytes.fromhex("ff010150"),
+        *([bytes.fromhex("00020150")] * 4),
+        bytes.fromhex("01010150"),
+        bytes.fromhex("00020150"),
+    ]
+    assert [(seq, payload) for _, seq, payload in done3] == [
+        (2, bytes(5)),
+        (4, bytes.fromhex("0100000000")),
+        (3, bytes.fromhex("020103013c")),
+        (6, bytes(5)),
+        (7, bytes.fromhex("0100000000")),
+        (8, bytes.fromhex("0200000000")),
+        (9, bytes.fromhex("0200000000")),
+        (11, bytes.fromhex("0401000000")),
+        (10, bytes.fromhex("0401030278")),
+    ]
+
+    # These captures exercise the stock firmware's special first-feed path.
+    # Its duration varies: one exchange sends the counted command without a
+    # preceding query, while another observes 0,1,2,2 first. Do not impose this
+    # path on ordinary counted feeds.
+    first_free_run_progress = [payload[0] for _, seq, payload in done3 if seq == 2]
+    second_free_run_progress = [payload[0] for _, seq, payload in done3 if 6 <= seq <= 9]
+    assert first_free_run_progress == [0]
+    assert second_free_run_progress == [0, 1, 2, 2]
+
+
 def parse_frames(stream):
     """Greedy AA AA framing with CRC-gated acceptance (resync on failure)."""
     frames, i, n = [], 0, len(stream)
     while i < n - 2:
         if stream[i] == 0xAA and stream[i + 1] == 0xAA:
             length = stream[i + 2]
-            if 7 <= length <= 32 and i + length <= n:
+            if 7 <= length <= 19 and i + length <= n:
                 fr = stream[i : i + length]
                 if crc16_ccitt_false(fr) == 0:
                     frames.append(fr)
@@ -82,6 +176,9 @@ def main():
     for expected in (0x01, 0x02, 0x07, 0x09, 0x0B, 0x0E):
         assert types[expected] > 0, f"expected command type 0x{expected:02X} not seen"
     print(f"ok:   {grand_frames} CRC-valid frames total; all core command types present")
+
+    assert_stock_feed_traces()
+    print("ok:   stock dispense ordering, completions, and pacing")
 
     print("\nALL TESTS PASSED")
     return 0

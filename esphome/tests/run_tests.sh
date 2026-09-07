@@ -8,10 +8,14 @@ c++ -std=c++17 -Wall -Wextra -I../components/petkit_feeder test_protocol.cpp -o 
 /tmp/petkit_test_protocol
 
 echo
-echo "== C++ framer/queue unit test =="
+echo "== C++ framer unit test =="
 c++ -std=c++17 -Wall -Wextra -I../components/petkit_feeder test_framer.cpp -o /tmp/petkit_test_framer
 /tmp/petkit_test_framer
 
 echo
 echo "== Capture regression test =="
 python3 test_captures.py
+
+echo
+echo "== Firmware instruction checks =="
+python3 verify_firmware.py

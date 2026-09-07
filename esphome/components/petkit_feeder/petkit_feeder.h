@@ -23,6 +23,7 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/binary_sensor/binary_sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "petkit_protocol.h"
 #include "petkit_framer.h"
 
@@ -57,6 +58,8 @@ enum PetkitPacketType : uint8_t {
 
 class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
  public:
+  explicit PetkitFeeder(GPIOPin *reset_pin) : reset_pin_(reset_pin) {}
+
   void setup() override;
   void loop() override;
   void update() override;  // polls status
@@ -64,27 +67,28 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   float get_setup_priority() const override { return setup_priority::DATA; }
 
   // Wiring.
-  void set_reset_pin(GPIOPin *pin) { this->reset_pin_ = pin; }
   void set_send_init(bool v) { this->send_init_ = v; }
 
-  // Diagnostic sensors (all optional; owned elsewhere, we only publish).
-  // Names reflect what is actually evidenced: food/door bytes and two raw
-  // 16-bit pairs (adapter pair reads ~0 on battery). Units/scaling unconfirmed.
-  void set_food_ok(binary_sensor::BinarySensor *s) { this->food_ok_ = s; }
-  void set_door_flag(binary_sensor::BinarySensor *s) { this->door_flag_ = s; }
-  void set_adapter_a(sensor::Sensor *s) { this->adapter_a_ = s; }
-  void set_adapter_b(sensor::Sensor *s) { this->adapter_b_ = s; }
-  void set_battery_a(sensor::Sensor *s) { this->battery_a_ = s; }
-  void set_battery_b(sensor::Sensor *s) { this->battery_b_ = s; }
+  // M0 digital inputs and power measurements.
+  void set_dispenser_door_sensor(binary_sensor::BinarySensor *s) { this->dispenser_door_sensor_ = s; }
+  void set_food_detected(binary_sensor::BinarySensor *s) { this->food_detected_ = s; }
+  void set_dispenser_wheel_sensor(binary_sensor::BinarySensor *s) { this->dispenser_wheel_sensor_ = s; }
+  void set_adapter_adc(sensor::Sensor *s) { this->adapter_adc_ = s; }
+  void set_adapter_voltage(sensor::Sensor *s) { this->adapter_voltage_ = s; }
+  void set_battery_adc(sensor::Sensor *s) { this->battery_adc_ = s; }
+  void set_battery_voltage(sensor::Sensor *s) { this->battery_voltage_ = s; }
+  void set_power_source(text_sensor::TextSensor *s) { this->power_source_ = s; }
 
-  // High-level actions, callable from YAML lambdas.
-  // Queue `steps` raw dispense commands; they are sent one at a time, each
-  // waiting for its matching 0x0C completion (or a timeout) before the next.
-  // A "step" is one raw motor command, NOT a proven food portion — the mapping
-  // to food quantity is unverified (see AGENTS.md).
-  void feed(uint8_t steps);
-  // Enqueue one raw dispense command: payload duration,distance,direction,current.
-  void dispense(uint8_t duration, uint8_t distance, uint8_t direction, uint8_t current);
+  // Run a normal stock feed transaction. One serving selects one counted M0 wheel
+  // cycle and is approximately 5 g, with the usual variation from kibble size,
+  // density, and hopper level.
+  void feed(uint8_t servings);
+  // Physical-button mode: keep the outlet open and dispense one serving at a
+  // time while the button remains held. Releasing the button prevents another
+  // serving from starting; an in-progress serving completes before the outlet
+  // closes.
+  void manual_feed_start();
+  void manual_feed_stop();
   // Door commands take a single payload byte (stock firmware sends 0x1E).
   void open_door(uint8_t param = 0x1E);
   void close_door(uint8_t param = 0x1E);
@@ -92,7 +96,7 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   void beep(uint16_t on_ms, uint16_t off_ms, uint16_t count);
   void blink_upper(uint16_t on_ms, uint16_t off_ms, uint16_t count);
   void blink_lower(uint16_t on_ms, uint16_t off_ms, uint16_t count);
-  // Pulse the ISD91230 reset line (if configured) to recover a wedged M0.
+  // Pulse the ISD91230 reset line to recover a wedged M0.
   void reset_mcu();
 
  protected:
@@ -102,22 +106,27 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   void blink_beep_(uint8_t subcommand, uint16_t on_ms, uint16_t off_ms, uint16_t count);
   bool ready_() const { return this->init_step_ >= this->init_seq_len_(); }
   uint8_t init_seq_len_() const;
-  void enqueue_dispense_(const uint8_t payload[4]);
-  void service_dispense_queue_(uint32_t now);
-
+  void service_feed_(uint32_t now);
+  void start_counted_motion_();
+  void start_closing_(uint32_t now);
+  void finish_feed_();
   GPIOPin *reset_pin_{nullptr};
   bool send_init_{true};
 
-  binary_sensor::BinarySensor *food_ok_{nullptr};
-  binary_sensor::BinarySensor *door_flag_{nullptr};
-  sensor::Sensor *adapter_a_{nullptr};
-  sensor::Sensor *adapter_b_{nullptr};
-  sensor::Sensor *battery_a_{nullptr};
-  sensor::Sensor *battery_b_{nullptr};
+  binary_sensor::BinarySensor *dispenser_door_sensor_{nullptr};
+  binary_sensor::BinarySensor *food_detected_{nullptr};
+  binary_sensor::BinarySensor *dispenser_wheel_sensor_{nullptr};
+  sensor::Sensor *adapter_adc_{nullptr};
+  sensor::Sensor *adapter_voltage_{nullptr};
+  sensor::Sensor *battery_adc_{nullptr};
+  sensor::Sensor *battery_voltage_{nullptr};
+  text_sensor::TextSensor *power_source_{nullptr};
 
   // Receive frame assembler (see petkit_framer.h).
   protocol::FrameAssembler assembler_;
   uint32_t last_byte_ms_{0};
+  uint8_t status_inputs_[3]{0, 0, 0};
+  bool have_status_inputs_{false};
 
   // Startup init state machine. Each config packet is sent, then we wait for
   // the M0's matching ack (same type, len 8, payload 0x01) before the next —
@@ -126,14 +135,28 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   uint32_t init_next_ms_{0};
   bool init_waiting_ack_{false};
   uint32_t init_deadline_{0};
+  // Restore the feeder's safe mechanical state after ESP or M0 startup.
+  bool close_on_ready_{true};
 
-  // Dispense pacing queue: each entry keeps its own 4-byte payload, sent one at
-  // a time and matched to its 0x0C completion by sequence number.
-  protocol::PayloadQueue<16> dispense_q_;
-  bool dispense_busy_{false};      // waiting for a matching 0x0C completion
-  uint8_t dispense_sent_seq_{0};   // seq of the in-flight dispense command
-  uint32_t dispense_deadline_{0};
-
+  enum FeedState : uint8_t {
+    FEED_IDLE,
+    FEED_WAIT_OPEN,
+    FEED_OPEN_DELAY,
+    FEED_DISPENSING,
+    FEED_MANUAL_REPEAT,
+    FEED_CLOSE_DELAY,
+    FEED_WAIT_CLOSE,
+  };
+  FeedState feed_state_{FEED_IDLE};
+  uint8_t feed_servings_{1};
+  bool manual_feed_{false};
+  bool manual_button_held_{false};
+  uint8_t feed_door_seq_{0};
+  uint8_t feed_motion_seq_{0};
+  uint8_t feed_query_seq_{0};
+  bool feed_query_pending_{false};
+  uint32_t feed_next_action_ms_{0};
+  uint32_t feed_deadline_ms_{0};
   uint8_t seq_{0};
 };
 

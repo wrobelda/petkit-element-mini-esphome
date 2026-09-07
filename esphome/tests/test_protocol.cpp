@@ -94,12 +94,13 @@ int main() {
   // --- parse_status field extraction (AC adapter plugged) ---
   Status s = parse_status(status.data(), status.size());
   CHECK(s.valid, "parse_status valid");
-  CHECK(s.food_ok == false, "food low (0x00)");
-  CHECK(s.door_fault == false, "door ok (0x00)");
+  CHECK(s.dispenser_door_sensor == false, "dispenser-door sensor byte == 0");
+  CHECK(s.food_detected == false, "food-detected byte == 0");
+  CHECK(s.dispenser_wheel_sensor == true, "dispenser-wheel sensor byte == 1");
   CHECK(s.adapter_adc == 0x08EC, "adapter_adc == 0x08EC");
-  CHECK(s.adapter_mv == 0x023F, "adapter_mv == 0x023F");
+  CHECK(s.adapter_centivolts == 0x023F, "adapter_centivolts == 0x023F");
   CHECK(s.battery_adc == 0x0871, "battery_adc == 0x0871");
-  CHECK(s.battery_mv == 0x0220, "battery_mv == 0x0220");
+  CHECK(s.battery_centivolts == 0x0220, "battery_centivolts == 0x0220");
 
   // --- parse_status on a battery-only capture: adapter fields read ~0 ---
   // From petkit_press_button.csv: payload 00 00 01 0002 0000 0767 01DD
@@ -111,8 +112,30 @@ int main() {
   batt[batt.size() - 1] = c & 0xFF;
   Status b = parse_status(batt.data(), batt.size());
   CHECK(b.valid, "parse_status(battery) valid");
-  CHECK(b.adapter_adc == 0x0002 && b.adapter_mv == 0x0000, "adapter fields ~0 on battery");
-  CHECK(b.battery_adc == 0x0767 && b.battery_mv == 0x01DD, "battery fields nonzero");
+  CHECK(b.adapter_adc == 0x0002 && b.adapter_centivolts == 0x0000, "adapter fields ~0 on battery");
+  CHECK(b.battery_adc == 0x0767 && b.battery_centivolts == 0x01DD, "battery fields nonzero");
+
+  // --- type-0x0C stock dispense results ---
+  // petkit03: a follow-up result reports 1; the delayed result reports 2.
+  auto dispense_one = bytes({0xAA, 0xAA, 0x0C, 0x0C, 0x04, 0x01, 0x00, 0x00,
+                             0x00, 0x00, 0x00, 0x00});
+  c = crc16_ccitt(dispense_one.data(), dispense_one.size() - 2);
+  dispense_one[dispense_one.size() - 2] = c >> 8;
+  dispense_one[dispense_one.size() - 1] = c & 0xFF;
+  DispenseResult one = parse_dispense_result(dispense_one.data(), dispense_one.size());
+  CHECK(one.valid && one.wheel_count == 1 && !one.complete,
+        "parse in-progress wheel result");
+
+  auto dispense_two = bytes({0xAA, 0xAA, 0x0C, 0x0C, 0x03, 0x02, 0x01, 0x03,
+                             0x01, 0x3C, 0x00, 0x00});
+  c = crc16_ccitt(dispense_two.data(), dispense_two.size() - 2);
+  dispense_two[dispense_two.size() - 2] = c >> 8;
+  dispense_two[dispense_two.size() - 1] = c & 0xFF;
+  DispenseResult two = parse_dispense_result(dispense_two.data(), dispense_two.size());
+  CHECK(two.valid && two.wheel_count == 2 && two.complete,
+        "parse completed wheel result");
+  CHECK(two.detail[0] == 0x03 && two.detail[1] == 0x01 && two.detail[2] == 0x3C,
+        "preserve completion measurements");
 
   std::printf("\n%s (%d failure%s)\n", failures ? "TESTS FAILED" : "ALL TESTS PASSED",
               failures, failures == 1 ? "" : "s");

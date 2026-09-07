@@ -1,7 +1,7 @@
-// Host unit test for the dependency-free RX frame assembler and dispense queue
+// Host unit test for the dependency-free RX frame assembler
 // (components/petkit_feeder/petkit_framer.h) — the same types the component
 // uses. Covers the behaviours that a pure-frame-construction test cannot:
-// RX resync, split frames, the multi-payload queue, and FIFO ordering.
+// RX resync and split frames.
 //
 // Build & run: c++ -std=c++17 -I../components/petkit_feeder test_framer.cpp -o /tmp/t && /tmp/t
 
@@ -71,29 +71,6 @@ int main() {
     auto f = run(fa, {0xAA, 0xAA, 0x07, 0x01, 0x01, 0x59, 0x9B,
                       0xAA, 0xAA, 0x08, 0x07, 0x01, 0x1E, 0xC5, 0x6D});
     CHECK(f.size() == 2 && f[1][3] == 0x07, "two consecutive frames both assemble");
-  }
-
-  // ---- PayloadQueue: distinct payloads preserved in FIFO order ----
-  {
-    PayloadQueue<4> q;
-    uint8_t a[4] = {0xFF, 0x01, 0x01, 0x50};
-    uint8_t b[4] = {0x01, 0x01, 0x01, 0x50};
-    uint8_t c[4] = {0x00, 0x02, 0x01, 0x50};
-    CHECK(q.push(a) && q.push(b) && q.push(c) && q.size() == 3, "queue accepts 3 distinct payloads");
-    uint8_t out[4];
-    bool order_ok = q.pop(out) && out[0] == 0xFF && out[1] == 0x01;
-    order_ok &= q.pop(out) && out[0] == 0x01 && out[1] == 0x01;
-    order_ok &= q.pop(out) && out[0] == 0x00 && out[1] == 0x02;
-    CHECK(order_ok, "distinct payloads pop in FIFO order (not all the newest)");
-    CHECK(q.empty() && !q.pop(out), "queue empties and pop() fails when empty");
-  }
-
-  // Queue respects capacity (push fails when full, no overwrite).
-  {
-    PayloadQueue<2> q;
-    uint8_t p[4] = {1, 2, 3, 4};
-    CHECK(q.push(p) && q.push(p) && !q.push(p), "push fails at capacity");
-    CHECK(q.full(), "full() reports capacity reached");
   }
 
   std::printf("\n%s (%d failure%s)\n", failures ? "TESTS FAILED" : "ALL TESTS PASSED",
