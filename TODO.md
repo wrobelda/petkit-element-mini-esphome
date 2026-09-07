@@ -21,9 +21,7 @@
   assume that reversing the write order is sufficient. Establish how the
   restored non-OS bootloader selects a known-good upper-slot V2 image before
   replacing the lower application, then use the stock OTA path to restore the
-  other slot if needed. The complete investigation brief is
-  [reverse-migration investigation
-  brief](research/ESP8266-EBOOT-V1-TO-NONOS-V2-PROMPT.md).
+  other slot if needed.
 - Make the Home Assistant/ESPHome Device Builder flow recognize a transition
   image and install the final device configuration without a separate manual
   web upload. Retest that Home Assistant retains one device-registry entry and
