@@ -251,6 +251,16 @@ identity, but Kickstart may already have replaced both stock application
 slots. If you want the option of restoring the exact original firmware, take a
 full serial backup before starting either installation method.
 
+### In case you lost your backup
+
+[`earlynerd/petkit-serial-bus`](https://github.com/earlynerd/petkit-serial-bus)
+publishes [communication
+captures](https://github.com/earlynerd/petkit-serial-bus/tree/main/Logic%20Analyzer%20Captures)
+and a [complete ESP8266 flash
+dump](https://github.com/earlynerd/petkit-serial-bus/tree/main/flash%20dumps).
+The dump can restore stock firmware when your own backup is unavailable, but a
+complete restore also copies the donor feeder's serial number.
+
 For wiring, serial download mode, and backup and restore commands, see the
 [hardware and recovery details][nonos-hardware].
 
