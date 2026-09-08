@@ -311,12 +311,12 @@ class DeviceIdentityTest(unittest.TestCase):
                 )
             )
 
-    def test_authentication_failure_is_not_unreachable(self) -> None:
+    def test_api_connection_failure_is_not_unreachable(self) -> None:
         result = subprocess.CompletedProcess(
-            [], 1, stdout="", stderr="ESPHome API authentication failed"
+            [], 1, stdout="", stderr="ESPHome API connection failed"
         )
         with mock.patch.object(install.subprocess, "run", return_value=result):
-            with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+            with self.assertRaisesRegex(RuntimeError, "connection failed"):
                 install.read_device_identity(
                     Path("python"), Path("/project"), "wrong.local", "key"
                 )

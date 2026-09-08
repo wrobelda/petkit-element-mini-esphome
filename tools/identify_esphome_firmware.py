@@ -55,7 +55,7 @@ def main() -> None:
     except (ResolveAPIError, SocketAPIError, TimeoutAPIError, TimeoutError, OSError):
         raise SystemExit(UNREACHABLE_EXIT) from None
     except APIConnectionError as error:
-        raise SystemExit(f"ESPHome API authentication failed: {error}") from error
+        raise SystemExit(f"ESPHome API connection failed: {error}") from error
     print(json.dumps(identity, separators=(",", ":")))
 
 
