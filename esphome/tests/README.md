@@ -1,25 +1,45 @@
 # Tests
 
-Run everything:
+Run the protocol and framer checks from this directory:
 
 ```sh
 ./run_tests.sh
 ```
 
-## What each test proves
+The runner requires Python 3 and a C++17 compiler available as `c++`. The C++
+tests include the same headers as the device component, so they exercise the
+shipping framing and parsing code.
 
-| Test | Kind | Proves |
-|------|------|--------|
-| `test_protocol.cpp` | native C++ (g++/clang, `-std=c++17`) | The shipping `petkit_protocol.h` — CRC, frame build/validate, status and wheel-result parsing — is correct, rejects corrupted/truncated frames, and `build_frame` reproduces **captured** get-status, open/close-door (`0x1E`), wheel query (`00 02 01 50`), and the 19-byte `0x0D` boot config byte-for-byte. |
-| `test_framer.cpp` | native C++ | The shipping `petkit_framer.h` RX `FrameAssembler` resyncs correctly after stray/triple `0xAA` and bogus lengths, and handles split and back-to-back frames. |
-| `test_captures.py` | Python, no deps | The framing + CRC model matches genuine bus traffic: ≥300 whole-frame-CRC-valid frames across the four captures, all core command types present. |
-| `verify_firmware.py` | Python (no deps) | Instruction-level, **both** firmwares: the M0 header check / length bounds (6..19) / `length-3` body loop / table-less CRC-16 (0x1021, seed 0xFFFF), AND the ESP8266 parser (`AA AA` header, length bounds 7..19) — asserted as exact opcodes at located offsets, plus the M0 CRC re-derived against captured packets. Also encodes the correction that the `decodePacket` string is MQTT code, not the UART decoder. |
-The component (`components/petkit_feeder/petkit_feeder.cpp`) and
-`test_protocol.cpp` both include `petkit_protocol.h`, so the unit test exercises
-the exact code that runs on the device.
+## Self-contained checks
 
-## Fixtures
-Set `PETKIT_SERIAL_BUS_DIR` to a local checkout of
+| Test | Coverage |
+|---|---|
+| `test_protocol.cpp` | CRC, frame construction and validation, status parsing, and wheel-result parsing |
+| `test_framer.cpp` | Receive assembly, split and consecutive frames, stray headers, invalid lengths, and resynchronization |
+
+The protocol test rejects corrupted and truncated frames and compares generated
+packets with captured status, door, wheel-query, and boot-configuration vectors.
+These tests do not require private files or feeder hardware.
+
+## Optional capture and firmware checks
+
+Set `PETKIT_SERIAL_BUS_DIR` to a private local checkout of
 [`earlynerd/petkit-serial-bus`](https://github.com/earlynerd/petkit-serial-bus)
-to run the optional capture and firmware checks. Without that variable, those
-checks skip; the self-contained C++ tests always run.
+to enable the reference-data checks:
+
+| Test | Coverage |
+|---|---|
+| `test_captures.py` | Framing and CRC against four bus captures, with at least 300 valid frames and all core command types present |
+| `verify_firmware.py` | Exact parser opcodes in both stock processors' firmware and the ISD91230 CRC implementation |
+
+The firmware checks distinguish what each image establishes:
+
+- The ISD91230 image contains the header checks, length bounds of 6–19, the
+  `length-3` body loop, and CRC-16 with polynomial `0x1021` and seed `0xFFFF`.
+- The ESP8266 image contains the `AA AA` header checks and length bounds of
+  7–19. These checks establish framing, not the ESP8266 CRC implementation.
+
+The script also compares the ISD91230 CRC calculation with captured packets.
+Without `PETKIT_SERIAL_BUS_DIR`, the capture and firmware checks skip while
+the self-contained C++ tests still run. Reference firmware dumps are not
+distributed by this project.
