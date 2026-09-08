@@ -63,6 +63,22 @@ class CheckoutTest(unittest.TestCase):
             marker_path = path / marker
             marker_path.parent.mkdir(parents=True, exist_ok=True)
             marker_path.touch()
+        subprocess.run(["git", "add", "."], cwd=path, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--quiet",
+                "-m",
+                "test checkout",
+            ],
+            cwd=path,
+            check=True,
+        )
         return path
 
     def test_accepts_expected_checkout(self) -> None:
@@ -78,23 +94,25 @@ class CheckoutTest(unittest.TestCase):
                 parent,
                 "petkit-compat-server",
                 install.REPOSITORIES["petkit-compat-server"],
+                "HEAD",
             )
 
             self.assertEqual(actual, expected)
 
-    def test_accepts_canonical_kickstart_checkout(self) -> None:
+    def test_accepts_expected_kickstart_checkout(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
             expected = self.make_checkout(
                 parent,
                 "esphome-kickstart",
-                "https://github.com/libretiny-eu/esphome-kickstart.git",
+                "https://github.com/wrobelda/esphome-kickstart.git",
             )
 
             actual = install.ensure_checkout(
                 parent,
                 "esphome-kickstart",
                 install.REPOSITORIES["esphome-kickstart"],
+                "HEAD",
             )
 
             self.assertEqual(actual, expected)
@@ -113,6 +131,7 @@ class CheckoutTest(unittest.TestCase):
                     parent,
                     "petkit-compat-server",
                     install.REPOSITORIES["petkit-compat-server"],
+                    "HEAD",
                 )
 
     def test_rejects_non_checkout_directory(self) -> None:
@@ -125,6 +144,48 @@ class CheckoutTest(unittest.TestCase):
                     parent,
                     "petkit-compat-server",
                     install.REPOSITORIES["petkit-compat-server"],
+                    "HEAD",
+                )
+
+    def test_rejects_checkout_at_another_revision(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            checkout = self.make_checkout(
+                parent,
+                "petkit-compat-server",
+                "https://github.com/wrobelda/petkit-compat-server.git",
+            )
+            first = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=checkout,
+                check=True,
+                capture_output=True,
+                text=True,
+            ).stdout.strip()
+            (checkout / "later").touch()
+            subprocess.run(["git", "add", "later"], cwd=checkout, check=True)
+            subprocess.run(
+                [
+                    "git",
+                    "-c",
+                    "user.name=Test",
+                    "-c",
+                    "user.email=test@example.invalid",
+                    "commit",
+                    "--quiet",
+                    "-m",
+                    "later",
+                ],
+                cwd=checkout,
+                check=True,
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "requires"):
+                install.ensure_checkout(
+                    parent,
+                    "petkit-compat-server",
+                    install.REPOSITORIES["petkit-compat-server"],
+                    first,
                 )
 
 

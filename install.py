@@ -23,12 +23,13 @@ REPOSITORIES = {
     "petkit-compat-server": "https://github.com/wrobelda/petkit-compat-server.git",
     "esphome-kickstart": "https://github.com/wrobelda/esphome-kickstart.git",
 }
+REPOSITORY_REVISIONS = {
+    "petkit-compat-server": "5363a4a7eb366c8ba30b71be5626b26400331fcd",
+    "esphome-kickstart": "451a67abf2488aef7f0c6d26b9a637d5be328d5e",
+}
 ALLOWED_REPOSITORY_ORIGINS = {
     "petkit-compat-server": {"wrobelda/petkit-compat-server"},
-    "esphome-kickstart": {
-        "libretiny-eu/esphome-kickstart",
-        "wrobelda/esphome-kickstart",
-    },
+    "esphome-kickstart": {"wrobelda/esphome-kickstart"},
 }
 REPOSITORY_MARKERS = {
     "petkit-compat-server": ("serve_petkit_api.py", "provision_petkit_device.py"),
@@ -201,7 +202,7 @@ def github_repository(url: str) -> str | None:
     return path.removesuffix(".git").rstrip("/")
 
 
-def validate_checkout(path: Path, name: str) -> None:
+def validate_checkout(path: Path, name: str, revision: str) -> None:
     if not (path / ".git").exists():
         raise RuntimeError(f"{path} exists but is not a Git checkout")
     try:
@@ -223,15 +224,35 @@ def validate_checkout(path: Path, name: str) -> None:
     missing = [marker for marker in REPOSITORY_MARKERS[name] if not (path / marker).is_file()]
     if missing:
         raise RuntimeError(f"{path} is missing required files: {', '.join(missing)}")
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    expected = subprocess.run(
+        ["git", "rev-parse", f"{revision}^{{commit}}"],
+        cwd=path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    if head != expected:
+        raise RuntimeError(
+            f"{path} is at {head[:12]}, but this installer requires {revision}; "
+            "move the checkout aside or check out the required revision"
+        )
 
 
-def ensure_checkout(parent: Path, name: str, url: str) -> Path:
+def ensure_checkout(parent: Path, name: str, url: str, revision: str) -> Path:
     path = parent / name
     if path.is_dir():
-        validate_checkout(path, name)
+        validate_checkout(path, name, revision)
         return path
     run(["git", "clone", url, name], cwd=parent)
-    validate_checkout(path, name)
+    run(["git", "checkout", "--detach", revision], cwd=path)
+    validate_checkout(path, name, revision)
     return path
 
 
@@ -268,8 +289,18 @@ def main() -> None:
 
     project = Path(__file__).resolve().parent
     parent = project.parent
-    compat = ensure_checkout(parent, "petkit-compat-server", REPOSITORIES["petkit-compat-server"])
-    kickstart = ensure_checkout(parent, "esphome-kickstart", REPOSITORIES["esphome-kickstart"])
+    compat = ensure_checkout(
+        parent,
+        "petkit-compat-server",
+        REPOSITORIES["petkit-compat-server"],
+        REPOSITORY_REVISIONS["petkit-compat-server"],
+    )
+    kickstart = ensure_checkout(
+        parent,
+        "esphome-kickstart",
+        REPOSITORIES["esphome-kickstart"],
+        REPOSITORY_REVISIONS["esphome-kickstart"],
+    )
     if shutil.which("curl") is None:
         raise SystemExit("curl is required for the authenticated migration upload")
 
