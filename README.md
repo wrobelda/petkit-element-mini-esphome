@@ -22,11 +22,9 @@ approximately 5 g. Actual weight varies with the food and hopper level.
 
 The wireless installation starts with Petkit's stock firmware, installs a small
 ESPHome transition image, then installs the complete feeder firmware. It does
-not require opening the feeder. A power failure while the final bootloader
-sector is being written can still require serial recovery, which means opening
-the feeder. Read the [hardware and serial
-connections][mini-hardware] and [recovery procedure][nonos-hardware] before
-starting; preserving an exact stock backup requires serial access.
+not require opening the feeder. Both installation methods save a recovery
+backup before installing the final firmware; see [Recovery and rollback](#recovery-and-rollback)
+if you need to restore it.
 
 ### Guided installation
 
@@ -184,12 +182,6 @@ when Petkit's stock ESP8266 OTA client initially installs it in the lower slot.
 Find the Petkit Kickstart address in Home Assistant or the router's client list.
 Download and keep its 2 MiB recovery image before installing the final firmware.
 
-The recovery image preserves the stock bootloader, device identity, RF data,
-system parameters, and the current contents of both application slots. It is
-not a pristine stock backup: stock OTA and automatic relocation can overwrite
-both stock applications. Keep the image private because it contains device
-credentials.
-
 Set the address and the web username from `secrets.yaml`; `curl` prompts for the
 web password. Return to the `petkit-element-mini-esphome` checkout first, so the
 firmware path below resolves correctly:
@@ -216,6 +208,52 @@ use normal ESPHome OTA.
 The image format, slot behavior, validation, and recovery controls are
 explained in the [Kickstart transition guide](esphome/KICKSTART.md).
 
+## Recovery and rollback
+
+If installation stops partway through, first rerun `python3 install.py`. The
+guided installer can continue when Kickstart or the final firmware is already
+running, including after a manual installation with the same `secrets.yaml`.
+
+Both installation methods download a complete 2 MiB flash backup before
+installing the final firmware. Keep your feeder's backup somewhere safe and
+private because it contains device and Wi-Fi credentials:
+
+- **Guided installation:** `local-cache/release/petkit-post-kickstart-<timestamp>.bin`.
+- **Manual installation:** `petkit-post-kickstart.bin` in the project directory.
+
+If the feeder no longer boots, restoring this backup requires opening the
+feeder and connecting a 3.3 V USB-to-serial adapter. A power failure during the
+final bootloader write is one situation that can require this procedure.
+
+1. Connect the adapter and put the feeder into serial download mode using the
+   [hardware and recovery details][nonos-hardware].
+2. In the project directory, set `PORT` to your adapter's serial port (for
+   example, `/dev/ttyUSB0` on Linux or `/dev/cu.usbserial-...` on macOS).
+   Set `BACKUP` to your saved backup: use the actual timestamped filename for a
+   guided installation, or `petkit-post-kickstart.bin` for a manual installation.
+
+   ```sh
+   PORT='/dev/ttyUSB0'
+   BACKUP='petkit-post-kickstart.bin'
+   .venv/bin/esptool --chip esp8266 --port "$PORT" --baud 460800 write-flash \
+     --flash-size 2MB 0x0 "$BACKUP"
+   .venv/bin/esptool --chip esp8266 --port "$PORT" verify-flash 0x0 "$BACKUP"
+   ```
+
+   If the serial connection is unreliable, retry without `--baud 460800`.
+3. After verification succeeds, release the Wi-Fi/reset button and turn the
+   feeder off and on again without holding the button. The feeder returns to
+   Kickstart; run `python3 install.py` to retry installation.
+
+**Returning to Petkit's stock firmware requires a separate backup taken before
+installation.** The installation backup preserves the device's settings and
+identity, but Kickstart may already have replaced both stock application
+slots. If you want the option of restoring the exact original firmware, take a
+full serial backup before starting either installation method.
+
+For wiring, serial download mode, and backup and restore commands, see the
+[hardware and recovery details][nonos-hardware].
+
 ## Configuration and development
 
 The ESPHome configuration and component documentation are under
@@ -228,5 +266,4 @@ cd esphome/tests
 
 Open work and hardware checks are tracked in [TODO.md](TODO.md).
 
-[mini-hardware]: https://github.com/wrobelda/petkit-compat-server/blob/main/devices/esp8266/nonos_v2/fresh-element-mini/HARDWARE.md
 [nonos-hardware]: https://github.com/wrobelda/petkit-compat-server/blob/main/devices/esp8266/nonos_v2/HARDWARE.md
