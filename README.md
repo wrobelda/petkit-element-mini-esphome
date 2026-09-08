@@ -237,11 +237,10 @@ final bootloader write is one situation that can require this procedure.
    BACKUP='petkit-post-kickstart.bin'
    .venv/bin/esptool --chip esp8266 --port "$PORT" --baud 460800 write-flash \
      --flash-size 2MB 0x0 "$BACKUP"
-   .venv/bin/esptool --chip esp8266 --port "$PORT" verify-flash 0x0 "$BACKUP"
    ```
 
    If the serial connection is unreliable, retry without `--baud 460800`.
-3. After verification succeeds, release the Wi-Fi/reset button and turn the
+3. After the write succeeds, release the Wi-Fi/reset button and turn the
    feeder off and on again without holding the button. The feeder returns to
    Kickstart; run `python3 install.py` to retry installation.
 
