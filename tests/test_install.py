@@ -284,10 +284,8 @@ class DeviceIdentityTest(unittest.TestCase):
             [],
             0,
             stdout=(
-                '{"name":"petkit-feeder","friendly_name":"Petkit Feeder",'
-                '"mac_address":"E8:68:E7:00:00:01",'
-                '"project_name":"petkit.fresh-element-mini",'
-                '"project_version":"0.1"}'
+                '{"mac_address":"E8:68:E7:00:00:01",'
+                '"project_name":"petkit.fresh-element-mini"}'
             ),
             stderr="",
         )
@@ -331,11 +329,8 @@ class FirmwarePhaseTest(unittest.TestCase):
         mac: str = "E8:68:E7:00:00:01",
     ) -> install.DeviceIdentity:
         return install.DeviceIdentity(
-            name="petkit",
-            friendly_name="Petkit",
             mac_address=mac,
             project_name=project_name,
-            project_version="0.1",
         )
 
     def test_detects_final_project_by_authenticated_identity(self) -> None:
@@ -441,11 +436,8 @@ class MainResumeTest(unittest.TestCase):
     @staticmethod
     def identity(project_name: str) -> install.DeviceIdentity:
         return install.DeviceIdentity(
-            name="petkit-feeder",
-            friendly_name="Petkit Feeder",
             mac_address="E8:68:E7:00:00:01",
             project_name=project_name,
-            project_version="0.1",
         )
 
     def common_patches(self, project: Path) -> tuple[mock._patch, ...]:

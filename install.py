@@ -62,11 +62,8 @@ class DeviceMismatchError(RuntimeError):
 
 @dataclass(frozen=True)
 class DeviceIdentity:
-    name: str
-    friendly_name: str
     mac_address: str
     project_name: str
-    project_version: str
 
 
 @dataclass(frozen=True)
@@ -242,11 +239,8 @@ def read_device_identity(
     try:
         data = json.loads(result.stdout)
         return DeviceIdentity(
-            name=data["name"],
-            friendly_name=data["friendly_name"],
             mac_address=data["mac_address"],
             project_name=data["project_name"],
-            project_version=data["project_version"],
         )
     except (KeyError, TypeError, json.JSONDecodeError) as error:
         raise RuntimeError(f"invalid ESPHome identity returned for {host}") from error

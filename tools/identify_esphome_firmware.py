@@ -37,11 +37,8 @@ async def read_identity(host: str, timeout: float) -> dict[str, str]:
         await asyncio.wait_for(client.connect(login=True), timeout=timeout)
         info = await asyncio.wait_for(client.device_info(), timeout=timeout)
         return {
-            "name": info.name,
-            "friendly_name": info.friendly_name,
             "mac_address": info.mac_address,
             "project_name": info.project_name,
-            "project_version": info.project_version,
         }
     finally:
         await client.disconnect(force=True)
