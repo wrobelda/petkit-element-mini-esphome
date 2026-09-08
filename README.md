@@ -30,12 +30,17 @@ starting; preserving an exact stock backup requires serial access.
 
 ### Guided installation
 
-The guided installer checks out the two supporting projects, creates the build
-environment, asks for the Wi-Fi and recovery credentials, builds both images,
-runs the local Petkit API, provisions the feeder, saves a recovery image, and
-uploads the final firmware. It pauses while you put the feeder in setup mode
-and while you reconnect the computer to your normal Wi-Fi network, then waits
-until the final ESPHome API is reachable.
+The guided installer handles the complete migration:
+
+1. Download the supporting projects and prepare the build environment.
+2. Ask for Wi-Fi and recovery credentials, then build Kickstart and the final
+   feeder firmware.
+3. Run the local Petkit API and provision the feeder to download Kickstart.
+4. Save a recovery image and install the final firmware.
+5. Wait for the final ESPHome API to become reachable.
+
+The installer pauses when you need to put the feeder in setup mode or reconnect
+the computer to your normal Wi-Fi network.
 
 ```sh
 git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
@@ -78,9 +83,12 @@ under ESPHome's normal layout. Both configurations read the same
 `esphome/secrets.yaml`, so Home Assistant retains one device entry through the
 migration.
 
-Edit that file. Set the target 2.4 GHz Wi-Fi credentials, the feeder's IANA
-time-zone name, a unique fallback-AP password, a unique Kickstart web login,
-and an API encryption key generated with `openssl rand -base64 32`.
+Edit `esphome/secrets.yaml` and set:
+
+- the target 2.4 GHz Wi-Fi network name and password;
+- the feeder's IANA time-zone name;
+- a unique fallback-AP password and Kickstart web login;
+- an API encryption key generated with `openssl rand -base64 32`.
 
 Build the transition and final images:
 
@@ -169,12 +177,14 @@ when Petkit's stock ESP8266 OTA client initially installs it in the lower slot.
 
 #### 5. Preserve recovery data and install the final image
 
-Find the Petkit Kickstart address in Home Assistant or in the router's client
-list. Download and keep its 2 MiB recovery image. This image is not a pristine
-stock backup: it contains the stock bootloader, device identity, RF data,
-system parameters, and any stock application slot that was not overwritten.
-Automatic Kickstart relocation can overwrite both stock application slots.
-The recovery image contains private device credentials, so do not publish it.
+Find the Petkit Kickstart address in Home Assistant or the router's client list.
+Download and keep its 2 MiB recovery image before installing the final firmware.
+
+The recovery image preserves the stock bootloader, device identity, RF data,
+system parameters, and the current contents of both application slots. It is
+not a pristine stock backup: stock OTA and automatic relocation can overwrite
+both stock applications. Keep the image private because it contains device
+credentials.
 
 Set the address and the web username from `secrets.yaml`; `curl` prompts for the
 web password. Return to the `petkit-element-mini-esphome` checkout first, so the
@@ -194,17 +204,17 @@ curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
   "http://$KICKSTART_IP/hub/migrate?confirm=replace-vendor-bootloader"
 ```
 
-Kickstart validates the factory image, writes the application first, writes
-the new bootloader last, and reboots. Home Assistant should reuse the
-Kickstart device entry and rename it to Petkit Feeder. Future updates use
-normal ESPHome OTA.
+Kickstart writes the application, validates the complete factory image and
+flash readback, then writes the new bootloader and reboots. Home Assistant should
+reuse the Kickstart device entry and rename it to Petkit Feeder. Future updates
+use normal ESPHome OTA.
 
 The image format, slot behavior, validation, and recovery controls are
 explained in the [Kickstart transition guide](esphome/KICKSTART.md).
 
 ## Configuration and development
 
-The tested ESPHome configuration and component documentation are under
+The ESPHome configuration and component documentation are under
 [`esphome/`](esphome/). Run its regression suite with:
 
 ```sh
