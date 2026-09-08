@@ -338,9 +338,11 @@ instead of `yield()`, so the same validator remains safe in the synchronous
 
 Static disassembly of the ignored stock user-bin images in the sibling
 `petkit-compat-server` checkout. All offsets below are reproducible with
-`/tmp/disasm.py` (objcopy flat-binary → ELF32-xtensa, then objdump -d). Toolchain:
-`.../toolchain-xtensa/bin/xtensa-lx106-elf-obj{copy,dump}` (binutils 2.32; `-D`
-on a flat binary segfaults, so the ELF-conversion wrapper is required).
+`devices/esp8266/nonos_v2/tools/disassemble.py` from that project. The helper
+converts the extracted flat binary to ELF32-Xtensa before running objdump,
+because this toolchain's `objdump -D` crashes on the flat binary. The helper
+discovers the installed `xtensa-lx106-elf-objcopy` and
+`xtensa-lx106-elf-objdump` executables.
 
 ### Address mapping (the load-bearing correction)
 For an extracted V2 user-bin, irom0 data starts at file offset `0x10` and maps
