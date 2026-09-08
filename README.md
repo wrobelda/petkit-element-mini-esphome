@@ -37,10 +37,14 @@ The guided installer handles the complete migration:
    feeder firmware.
 3. Run the local Petkit API and provision the feeder to download Kickstart.
 4. Save a recovery image and install the final firmware.
-5. Wait for the final ESPHome API to become reachable.
+5. Authenticate to the ESPHome API and confirm that the final feeder firmware
+   is running on the same physical device.
 
 The installer pauses when you need to put the feeder in setup mode or reconnect
-the computer to your normal Wi-Fi network.
+the computer to your normal Wi-Fi network. If the process is interrupted after
+Kickstart or the final firmware boots, run the same command again. The installer
+identifies the running firmware and continues from that phase without repeating
+stock provisioning or a completed migration.
 
 ```sh
 git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
