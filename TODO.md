@@ -4,7 +4,7 @@
 
 - Replace the temporary `/hub/migrate` installer with an ESPHome OTA design
   that understands V1/eboot and non-OS SDK V2 images. It must handle V1→V1,
-  V2→V2, V2→V1, and V1→V2 explicitly, with authenticated layout metadata,
+  V2→V2, and V2→V1 explicitly, with authenticated layout metadata,
   safe write order, validation, and power-loss behavior. While Kickstart is
   running, its OTA backend must detect the required transition and perform it
   internally when Device Builder sends a normal OTA request; the user must not
@@ -12,16 +12,6 @@
   demonstrate that behavior in ESPHome Kickstart first, then ask the ESPHome
   and Kickstart maintainers whether ESPHome should absorb the backend or the
   wider Kickstart project.
-- Implement and hardware-test the reverse V1/eboot→paired non-OS V2 migration
-  in ESPHome Kickstart. It should let an installed ESPHome device restore its
-  vendor bootloader and stock application without UART access, while preserving
-  RF calibration, system parameters, and per-device identity. Reuse the
-  existing layout schema, upload authentication, image validators, staged
-  writes, readback checks, and bootloader-last commit where they apply; do not
-  assume that reversing the write order is sufficient. Establish how the
-  restored non-OS bootloader selects a known-good upper-slot V2 image before
-  replacing the lower application, then use the stock OTA path to restore the
-  other slot if needed.
 - Make the Home Assistant/ESPHome Device Builder flow recognize a transition
   image and install the final device configuration without a separate manual
   web upload. Retest that Home Assistant retains one device-registry entry and
