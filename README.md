@@ -61,7 +61,7 @@ Keep the checkouts next to each other so the commands below work unchanged:
 git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
 git clone https://github.com/wrobelda/petkit-compat-server.git
 git clone https://github.com/wrobelda/esphome-kickstart.git
-git -C petkit-compat-server checkout --detach 838bb5c2d9075b22410b9efafd9d71b5d868e8e8
+git -C petkit-compat-server checkout --detach 5ac65f80de2a78e659a303442c32a82e23ce49a0
 git -C esphome-kickstart checkout --detach 451a67abf2488aef7f0c6d26b9a637d5be328d5e
 ```
 
