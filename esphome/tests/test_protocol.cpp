@@ -102,9 +102,9 @@ int main() {
   // --- parse_status field extraction (AC adapter plugged) ---
   Status s = parse_status(status.data(), status.size());
   CHECK(s.valid, "parse_status valid");
-  CHECK(s.dispenser_door_sensor == false, "dispenser-door sensor byte == 0");
+  CHECK(s.dispenser_door_feedback == 0, "dispenser-door sensor byte == 0");
   CHECK(s.food_detected == false, "food-detected byte == 0");
-  CHECK(s.dispenser_wheel_sensor == true, "dispenser-wheel sensor byte == 1");
+  CHECK(s.dispenser_wheel_feedback == 1, "dispenser-wheel sensor byte == 1");
   CHECK(s.adapter_adc == 0x08EC, "adapter_adc == 0x08EC");
   CHECK(s.adapter_centivolts == 0x023F, "adapter_centivolts == 0x023F");
   CHECK(s.battery_adc == 0x0871, "battery_adc == 0x0871");

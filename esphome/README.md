@@ -154,7 +154,7 @@ module.
 | Controls | Feed now, Open door, Close door, Beep, Refresh status, Restart motor controller |
 | Status | Food detected, Power source, Adapter voltage, Battery voltage |
 | Configuration | Wi-Fi indicator; enable, time, and amount for each schedule |
-| Diagnostics | Dispenser door feedback (raw), Dispenser wheel feedback (raw), Adapter ADC, Battery ADC, Manual feed button, Wi-Fi reset button |
+| Diagnostics | Dispenser door sensor level, Dispenser wheel sensor level, Adapter ADC, Battery ADC, Manual feed button, Wi-Fi reset button |
 
 `Feed now` requests one complete motor-controller wheel cycle, which
 corresponds to Petkit's nominal serving of approximately 5 g.
@@ -212,9 +212,10 @@ handshake as a local fail-safe.
   feeder. Each request completed the expected number of wheel cycles and the
   complete door sequence.
 - `Food detected` follows the feeder's optical food sensor.
-- `Dispenser door feedback (raw)` and `Dispenser wheel feedback (raw)` expose
-  ISD91230 input bits for troubleshooting. Their ON/OFF values do not mean that
-  the door is open/closed or that the wheel is moving/stopped.
+- `Dispenser door sensor level` reports the electrical level from the outlet
+  door sensor. `Dispenser wheel sensor level` reports the electrical level
+  from the wheel-position sensor. These diagnostic values can change while a
+  mechanism moves, so they are not final open/closed or moving/stopped states.
 - Adapter and battery voltages, including the `Power source` state, come from
   the feeder's ISD91230 motor controller. Raw ADC counts remain available as
   diagnostic entities.

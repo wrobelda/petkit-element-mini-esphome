@@ -22,9 +22,9 @@ PetkitFeeder = petkit_feeder_ns.class_(
 
 CONF_RESET_PIN = "reset_pin"
 CONF_SEND_INIT_SEQUENCE = "send_init_sequence"
-CONF_DISPENSER_DOOR_SENSOR = "dispenser_door_sensor"
+CONF_DISPENSER_DOOR_FEEDBACK = "dispenser_door_feedback"
 CONF_FOOD_DETECTED = "food_detected"
-CONF_DISPENSER_WHEEL_SENSOR = "dispenser_wheel_sensor"
+CONF_DISPENSER_WHEEL_FEEDBACK = "dispenser_wheel_feedback"
 CONF_ADAPTER_ADC = "adapter_adc"
 CONF_ADAPTER_VOLTAGE = "adapter_voltage"
 CONF_BATTERY_ADC = "battery_adc"
@@ -55,13 +55,9 @@ CONFIG_SCHEMA = (
             cv.GenerateID(): cv.declare_id(PetkitFeeder),
             cv.Required(CONF_RESET_PIN): pins.gpio_output_pin_schema,
             cv.Optional(CONF_SEND_INIT_SEQUENCE, default=True): cv.boolean,
-            cv.Optional(CONF_DISPENSER_DOOR_SENSOR): binary_sensor.binary_sensor_schema(
-                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-            ),
+            cv.Optional(CONF_DISPENSER_DOOR_FEEDBACK): _raw_sensor(),
             cv.Optional(CONF_FOOD_DETECTED): binary_sensor.binary_sensor_schema(),
-            cv.Optional(CONF_DISPENSER_WHEEL_SENSOR): binary_sensor.binary_sensor_schema(
-                entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
-            ),
+            cv.Optional(CONF_DISPENSER_WHEEL_FEEDBACK): _raw_sensor(),
             cv.Optional(CONF_ADAPTER_ADC): _raw_sensor(),
             cv.Optional(CONF_ADAPTER_VOLTAGE): _voltage_sensor(),
             cv.Optional(CONF_BATTERY_ADC): _raw_sensor(),
@@ -89,15 +85,15 @@ async def to_code(config):
     await uart.register_uart_device(var, config)
 
     cg.add(var.set_send_init(config[CONF_SEND_INIT_SEQUENCE]))
-    if CONF_DISPENSER_DOOR_SENSOR in config:
-        sensor_var = await binary_sensor.new_binary_sensor(config[CONF_DISPENSER_DOOR_SENSOR])
-        cg.add(var.set_dispenser_door_sensor(sensor_var))
+    if CONF_DISPENSER_DOOR_FEEDBACK in config:
+        sensor_var = await sensor.new_sensor(config[CONF_DISPENSER_DOOR_FEEDBACK])
+        cg.add(var.set_dispenser_door_feedback(sensor_var))
     if CONF_FOOD_DETECTED in config:
         sensor_var = await binary_sensor.new_binary_sensor(config[CONF_FOOD_DETECTED])
         cg.add(var.set_food_detected(sensor_var))
-    if CONF_DISPENSER_WHEEL_SENSOR in config:
-        sensor_var = await binary_sensor.new_binary_sensor(config[CONF_DISPENSER_WHEEL_SENSOR])
-        cg.add(var.set_dispenser_wheel_sensor(sensor_var))
+    if CONF_DISPENSER_WHEEL_FEEDBACK in config:
+        sensor_var = await sensor.new_sensor(config[CONF_DISPENSER_WHEEL_FEEDBACK])
+        cg.add(var.set_dispenser_wheel_feedback(sensor_var))
     if CONF_ADAPTER_ADC in config:
         cg.add(var.set_adapter_adc(await sensor.new_sensor(config[CONF_ADAPTER_ADC])))
     if CONF_ADAPTER_VOLTAGE in config:

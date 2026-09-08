@@ -70,9 +70,9 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   void set_send_init(bool v) { this->send_init_ = v; }
 
   // M0 digital inputs and power measurements.
-  void set_dispenser_door_sensor(binary_sensor::BinarySensor *s) { this->dispenser_door_sensor_ = s; }
+  void set_dispenser_door_feedback(sensor::Sensor *s) { this->dispenser_door_feedback_ = s; }
   void set_food_detected(binary_sensor::BinarySensor *s) { this->food_detected_ = s; }
-  void set_dispenser_wheel_sensor(binary_sensor::BinarySensor *s) { this->dispenser_wheel_sensor_ = s; }
+  void set_dispenser_wheel_feedback(sensor::Sensor *s) { this->dispenser_wheel_feedback_ = s; }
   void set_adapter_adc(sensor::Sensor *s) { this->adapter_adc_ = s; }
   void set_adapter_voltage(sensor::Sensor *s) { this->adapter_voltage_ = s; }
   void set_battery_adc(sensor::Sensor *s) { this->battery_adc_ = s; }
@@ -113,9 +113,9 @@ class PetkitFeeder : public PollingComponent, public uart::UARTDevice {
   GPIOPin *reset_pin_{nullptr};
   bool send_init_{true};
 
-  binary_sensor::BinarySensor *dispenser_door_sensor_{nullptr};
+  sensor::Sensor *dispenser_door_feedback_{nullptr};
   binary_sensor::BinarySensor *food_detected_{nullptr};
-  binary_sensor::BinarySensor *dispenser_wheel_sensor_{nullptr};
+  sensor::Sensor *dispenser_wheel_feedback_{nullptr};
   sensor::Sensor *adapter_adc_{nullptr};
   sensor::Sensor *adapter_voltage_{nullptr};
   sensor::Sensor *battery_adc_{nullptr};

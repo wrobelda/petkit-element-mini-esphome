@@ -89,9 +89,9 @@ inline uint8_t build_frame(uint8_t *out, uint8_t type, uint8_t seq,
 // Decoded status (type 0x02) payload.
 struct Status {
   bool valid;
-  bool dispenser_door_sensor;  // payload[0] = M0 PB8, used by door motion
+  uint8_t dispenser_door_feedback;  // payload[0] = M0 PB8, used by door motion
   bool food_detected;    // payload[1] = M0 PB6, optical food-level threshold
-  bool dispenser_wheel_sensor;  // payload[2] = M0 PB7, used by wheel motion
+  uint8_t dispenser_wheel_feedback;  // payload[2] = M0 PB7, used by wheel motion
   uint16_t adapter_adc;
   uint16_t adapter_centivolts;
   uint16_t battery_adc;
@@ -107,9 +107,9 @@ inline Status parse_status(const uint8_t *frame, uint8_t len) {
   const uint8_t plen = len - OVERHEAD;
   if (plen < 3)
     return s;
-  s.dispenser_door_sensor = p[0] != 0x00;
+  s.dispenser_door_feedback = p[0];
   s.food_detected = p[1] != 0x00;
-  s.dispenser_wheel_sensor = p[2] != 0x00;
+  s.dispenser_wheel_feedback = p[2];
   if (plen >= 11) {
     s.adapter_adc = (p[3] << 8) | p[4];
     s.adapter_centivolts = (p[5] << 8) | p[6];

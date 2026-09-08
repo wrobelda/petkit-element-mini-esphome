@@ -279,14 +279,14 @@ petkit_feeder:
     inverted: true
   send_init_sequence: true
   update_interval: 10s
-  # M0 digital inputs. Their physical assignments are established from the M0
-  # firmware, while ON/OFF remains the raw electrical level.
-  dispenser_door_sensor:
-    name: "Dispenser door feedback (raw)"
+  # M0 digital inputs. The door and wheel values are raw electrical levels;
+  # they are not interpreted as final mechanism states.
+  dispenser_door_feedback:
+    name: "Dispenser door sensor level"
   food_detected:
     name: "Food detected"
-  dispenser_wheel_sensor:
-    name: "Dispenser wheel feedback (raw)"
+  dispenser_wheel_feedback:
+    name: "Dispenser wheel sensor level"
   adapter_voltage:
     name: "Adapter voltage"
   battery_voltage:

@@ -144,12 +144,12 @@ void PetkitFeeder::handle_frame_(const uint8_t *frame, uint8_t len) {
         this->status_inputs_[2] = status_payload[2];
         this->have_status_inputs_ = true;
       }
-      if (this->dispenser_door_sensor_ != nullptr)
-        this->dispenser_door_sensor_->publish_state(st.dispenser_door_sensor);
+      if (this->dispenser_door_feedback_ != nullptr)
+        this->dispenser_door_feedback_->publish_state(st.dispenser_door_feedback);
       if (this->food_detected_ != nullptr)
         this->food_detected_->publish_state(st.food_detected);
-      if (this->dispenser_wheel_sensor_ != nullptr)
-        this->dispenser_wheel_sensor_->publish_state(st.dispenser_wheel_sensor);
+      if (this->dispenser_wheel_feedback_ != nullptr)
+        this->dispenser_wheel_feedback_->publish_state(st.dispenser_wheel_feedback);
       if (payload_len >= 11) {
         if (this->adapter_adc_ != nullptr)
           this->adapter_adc_->publish_state(st.adapter_adc);
