@@ -104,23 +104,33 @@ def yaml_string(value: str) -> str:
     return json.dumps(value)
 
 
-def read_simple_secrets(path: Path) -> dict[str, str]:
+def read_yaml_secrets(path: Path, python: Path) -> dict[str, str]:
+    loader = (
+        "import json, pathlib, sys, yaml; "
+        "data = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text(encoding='utf-8')); "
+        "print(json.dumps(data))"
+    )
+    result = subprocess.run(
+        [str(python), "-c", loader, str(path)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown error"
+        raise RuntimeError(f"could not parse {path} as YAML: {detail}")
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"YAML loader returned invalid data for {path}") from error
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"{path} must contain a YAML mapping")
+
     values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or ":" not in line:
-            continue
-        key, raw_value = line.split(":", 1)
-        raw_value = raw_value.strip()
-        if len(raw_value) >= 2 and raw_value.startswith("'") and raw_value.endswith("'"):
-            value = raw_value[1:-1].replace("''", "'")
-        else:
-            try:
-                value = json.loads(raw_value)
-            except json.JSONDecodeError:
-                value = raw_value
-        if isinstance(value, str):
-            values[key.strip()] = value
+    for key, value in parsed.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise RuntimeError(f"every key and value in {path} must be a string")
+        values[key] = value
     return values
 
 
@@ -147,9 +157,9 @@ def write_secrets(path: Path) -> dict[str, str]:
     return values
 
 
-def load_or_create_secrets(path: Path) -> dict[str, str]:
+def load_or_create_secrets(path: Path, python: Path) -> dict[str, str]:
     if path.exists():
-        values = read_simple_secrets(path)
+        values = read_yaml_secrets(path, python)
         path.chmod(0o600)
         print(f"Using existing {path}")
         return values
@@ -312,7 +322,7 @@ def main() -> None:
     run([str(python), "-m", "pip", "install", "esphome==2026.9.0b1"], cwd=project)
 
     secrets_path = project / "esphome" / "secrets.yaml"
-    values = load_or_create_secrets(secrets_path)
+    values = load_or_create_secrets(secrets_path, python)
     required = {
         "wifi_ssid",
         "wifi_password",

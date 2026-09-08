@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 from pathlib import Path
+import sys
 
 import install
 
@@ -23,7 +24,7 @@ class SecretsTest(unittest.TestCase):
             )
 
             self.assertEqual(
-                install.read_simple_secrets(path),
+                install.read_yaml_secrets(path, Path(sys.executable)),
                 {
                     "plain": "plain value",
                     "double": "double value",
@@ -32,13 +33,38 @@ class SecretsTest(unittest.TestCase):
                 },
             )
 
+    def test_yaml_quotes_and_comments_match_yaml_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "secrets.yaml"
+            path.write_text(
+                "wifi_ssid: 'My: WiFi' # saved network\n"
+                'web_password: "hash # inside quotes" # comment\n',
+                encoding="utf-8",
+            )
+
+            self.assertEqual(
+                install.read_yaml_secrets(path, Path(sys.executable)),
+                {
+                    "wifi_ssid": "My: WiFi",
+                    "web_password": "hash # inside quotes",
+                },
+            )
+
+    def test_rejects_non_string_yaml_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "secrets.yaml"
+            path.write_text("wifi_ssid: true\n", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "must be a string"):
+                install.read_yaml_secrets(path, Path(sys.executable))
+
     def test_secures_existing_secrets_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "secrets.yaml"
             path.write_text("wifi_ssid: test\n", encoding="utf-8")
             path.chmod(0o644)
 
-            install.load_or_create_secrets(path)
+            install.load_or_create_secrets(path, Path(sys.executable))
 
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
@@ -50,7 +76,10 @@ class SecretsTest(unittest.TestCase):
                 values = install.write_secrets(path)
 
             self.assertEqual(values["timezone"], "Europe/Warsaw")
-            self.assertEqual(install.read_simple_secrets(path)["timezone"], "Europe/Warsaw")
+            self.assertEqual(
+                install.read_yaml_secrets(path, Path(sys.executable))["timezone"],
+                "Europe/Warsaw",
+            )
 
 
 class CheckoutTest(unittest.TestCase):
