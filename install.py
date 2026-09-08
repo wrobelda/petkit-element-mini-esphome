@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from dataclasses import dataclass
 from datetime import datetime
 import getpass
 import json
@@ -47,6 +48,16 @@ PLACEHOLDER_SECRETS = {
     "kickstart_web_password": "ChangeThisWebPassword",
     "api_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 }
+IDENTITY_HELPER = Path("tools/identify_esphome_firmware.py")
+
+
+@dataclass(frozen=True)
+class DeviceIdentity:
+    name: str
+    friendly_name: str
+    mac_address: str
+    project_name: str
+    project_version: str
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
@@ -194,6 +205,48 @@ def wait_for_host(host: str, port: int, timeout: int = 180) -> str:
         except OSError:
             time.sleep(2)
     raise RuntimeError(f"{host}:{port} did not become reachable within {timeout} seconds")
+
+
+def read_device_identity(
+    python: Path,
+    project: Path,
+    host: str,
+    api_key: str,
+    *,
+    timeout: float = 5.0,
+) -> DeviceIdentity | None:
+    env = os.environ.copy()
+    env["ESPHOME_API_KEY"] = api_key
+    result = subprocess.run(
+        [
+            str(python),
+            str(project / IDENTITY_HELPER),
+            host,
+            "--timeout",
+            str(timeout),
+        ],
+        cwd=project,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 4:
+        return None
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "unknown ESPHome API error"
+        raise RuntimeError(f"could not identify ESPHome firmware at {host}: {detail}")
+    try:
+        data = json.loads(result.stdout)
+        return DeviceIdentity(
+            name=data["name"],
+            friendly_name=data["friendly_name"],
+            mac_address=data["mac_address"],
+            project_name=data["project_name"],
+            project_version=data["project_version"],
+        )
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"invalid ESPHome identity returned for {host}") from error
 
 
 def require_build_artifact(path: Path, description: str) -> None:

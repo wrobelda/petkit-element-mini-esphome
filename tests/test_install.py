@@ -276,5 +276,51 @@ class BuildArtifactTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "test image was not created"):
                 install.require_build_artifact(path, "test image")
 
+
+class DeviceIdentityTest(unittest.TestCase):
+    def test_reads_authenticated_project_identity(self) -> None:
+        result = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=(
+                '{"name":"petkit-feeder","friendly_name":"Petkit Feeder",'
+                '"mac_address":"E8:68:E7:00:00:01",'
+                '"project_name":"petkit.fresh-element-mini",'
+                '"project_version":"0.1"}'
+            ),
+            stderr="",
+        )
+        with mock.patch.object(install.subprocess, "run", return_value=result) as run:
+            identity = install.read_device_identity(
+                Path("python"), Path("/project"), "192.0.2.10", "private-api-key"
+            )
+
+        assert identity is not None
+        self.assertEqual(identity.project_name, "petkit.fresh-element-mini")
+        command = run.call_args.args[0]
+        self.assertNotIn("private-api-key", command)
+        self.assertEqual(
+            run.call_args.kwargs["env"]["ESPHOME_API_KEY"], "private-api-key"
+        )
+
+    def test_unreachable_device_returns_none(self) -> None:
+        result = subprocess.CompletedProcess([], 4, stdout="", stderr="")
+        with mock.patch.object(install.subprocess, "run", return_value=result):
+            self.assertIsNone(
+                install.read_device_identity(
+                    Path("python"), Path("/project"), "missing.local", "key"
+                )
+            )
+
+    def test_authentication_failure_is_not_unreachable(self) -> None:
+        result = subprocess.CompletedProcess(
+            [], 1, stdout="", stderr="ESPHome API authentication failed"
+        )
+        with mock.patch.object(install.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(RuntimeError, "authentication failed"):
+                install.read_device_identity(
+                    Path("python"), Path("/project"), "wrong.local", "key"
+                )
+
 if __name__ == "__main__":
     unittest.main()
