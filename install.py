@@ -49,6 +49,15 @@ PLACEHOLDER_SECRETS = {
     "api_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 }
 IDENTITY_HELPER = Path("tools/identify_esphome_firmware.py")
+INSTALL_STATE = Path("local-cache/install-state.json")
+KICKSTART_PROJECT = "petkit.fresh-element-mini-kickstart"
+FINAL_PROJECT = "petkit.fresh-element-mini"
+PROVISION_COMMIT_OUTCOME_UNKNOWN_EXIT = 3
+AMBIGUOUS_MIGRATION_CURL_EXIT_CODES = {18, 28, 52, 55, 56}
+
+
+class DeviceMismatchError(RuntimeError):
+    pass
 
 
 @dataclass(frozen=True)
@@ -58,6 +67,12 @@ class DeviceIdentity:
     mac_address: str
     project_name: str
     project_version: str
+
+
+@dataclass(frozen=True)
+class DetectedFirmware:
+    host: str
+    identity: DeviceIdentity
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
@@ -195,18 +210,6 @@ def detect_local_ip() -> str:
         return str(sock.getsockname()[0])
 
 
-def wait_for_host(host: str, port: int, timeout: int = 180) -> str:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        try:
-            address = socket.gethostbyname(host)
-            with socket.create_connection((address, port), timeout=2):
-                return address
-        except OSError:
-            time.sleep(2)
-    raise RuntimeError(f"{host}:{port} did not become reachable within {timeout} seconds")
-
-
 def read_device_identity(
     python: Path,
     project: Path,
@@ -247,6 +250,126 @@ def read_device_identity(
         )
     except (KeyError, TypeError, json.JSONDecodeError) as error:
         raise RuntimeError(f"invalid ESPHome identity returned for {host}") from error
+
+
+def normalize_mac(value: str) -> str:
+    normalized = value.lower().replace(":", "").replace("-", "")
+    if len(normalized) != 12 or any(character not in "0123456789abcdef" for character in normalized):
+        raise RuntimeError(f"invalid ESPHome MAC address: {value!r}")
+    return normalized
+
+
+def load_expected_mac(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return normalize_mac(data["device_mac"])
+    except (KeyError, TypeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"invalid installation state in {path}") from error
+
+
+def save_expected_mac(path: Path, mac_address: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(
+        json.dumps({"device_mac": normalize_mac(mac_address)}) + "\n",
+        encoding="utf-8",
+    )
+    temporary.chmod(0o600)
+    os.replace(temporary, path)
+    path.chmod(0o600)
+
+
+def detect_running_firmware(
+    python: Path,
+    project: Path,
+    hosts: list[str],
+    api_key: str,
+    expected_mac: str | None,
+) -> DetectedFirmware | None:
+    errors: list[str] = []
+    for host in dict.fromkeys(hosts):
+        try:
+            identity = read_device_identity(python, project, host, api_key)
+        except RuntimeError as error:
+            errors.append(str(error))
+            continue
+        if identity is None:
+            continue
+        if identity.project_name not in {KICKSTART_PROJECT, FINAL_PROJECT}:
+            errors.append(
+                f"{host} runs unexpected ESPHome project {identity.project_name!r}"
+            )
+            continue
+        actual_mac = normalize_mac(identity.mac_address)
+        if expected_mac is not None and actual_mac != expected_mac:
+            raise DeviceMismatchError(
+                f"{host} is {identity.mac_address}, not the expected feeder MAC"
+            )
+        return DetectedFirmware(host=host, identity=identity)
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    return None
+
+
+def wait_for_firmware(
+    python: Path,
+    project: Path,
+    hosts: list[str],
+    api_key: str,
+    expected_project: str,
+    expected_mac: str | None,
+    *,
+    timeout: int = 180,
+) -> DetectedFirmware:
+    deadline = time.monotonic() + timeout
+    last_project: str | None = None
+    last_error: RuntimeError | None = None
+    while time.monotonic() < deadline:
+        try:
+            detected = detect_running_firmware(
+                python, project, hosts, api_key, expected_mac
+            )
+        except DeviceMismatchError:
+            raise
+        except RuntimeError as error:
+            last_error = error
+            detected = None
+        if detected is not None:
+            last_project = detected.identity.project_name
+            if last_project == expected_project:
+                return detected
+        time.sleep(2)
+    if last_project is not None:
+        raise RuntimeError(
+            f"expected ESPHome project {expected_project!r}, but {last_project!r} "
+            "remained reachable"
+        )
+    if last_error is not None:
+        raise RuntimeError(
+            f"could not authenticate the expected ESPHome firmware: {last_error}"
+        ) from last_error
+    raise RuntimeError(
+        f"ESPHome project {expected_project!r} did not become reachable within "
+        f"{timeout} seconds"
+    )
+
+
+def run_provisioner(
+    command: list[str], *, cwd: Path, env: dict[str, str]
+) -> bool:
+    print(f"\n+ {' '.join(command)}")
+    result = subprocess.run(command, cwd=cwd, env=env, check=False)
+    if result.returncode == 0:
+        return True
+    if result.returncode == PROVISION_COMMIT_OUTCOME_UNKNOWN_EXIT:
+        return False
+    raise subprocess.CalledProcessError(result.returncode, command)
+
+
+def migration_result_is_ambiguous(error: subprocess.CalledProcessError) -> bool:
+    return error.returncode in AMBIGUOUS_MIGRATION_CURL_EXIT_CODES
 
 
 def require_build_artifact(path: Path, description: str) -> None:
@@ -437,98 +560,178 @@ def main() -> None:
         cwd=project,
     )
 
-    computer_ip = prompt("This computer's address on the target Wi-Fi", detect_local_ip())
-    timezone_name = values["timezone"]
-    offset = datetime.now().astimezone().utcoffset()
-    timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
-    firewall_added = configure_firewall()
-    server = subprocess.Popen(
-        [
-            str(python),
-            "serve_petkit_api.py",
-            "--host",
-            "0.0.0.0",
-            "--port",
-            "8080",
-            "--profile",
-            str(PROFILE),
-            "--ota-image",
-            str(transition),
-        ],
-        cwd=compat,
+    state_path = project / INSTALL_STATE
+    expected_mac = load_expected_mac(state_path)
+    detected = detect_running_firmware(
+        python,
+        project,
+        [args.final_host, args.kickstart_host],
+        values["api_key"],
+        expected_mac,
     )
-    try:
-        time.sleep(1)
-        if server.poll() is not None:
-            raise RuntimeError("the local Petkit API server did not start")
-        input(
-            "\nPut the feeder in setup mode, connect this computer to its "
-            "PETKIT_FEEDER_... Wi-Fi network, then press Enter."
+    if detected is not None and detected.identity.project_name == FINAL_PROJECT:
+        save_expected_mac(state_path, detected.identity.mac_address)
+        print(
+            f"Final ESPHome firmware is already running at {detected.host} "
+            f"on feeder {detected.identity.mac_address}."
         )
-        provision_env = os.environ.copy()
-        provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
-        run(
-            [
-                str(python),
-                "provision_petkit_device.py",
-                "--profile",
-                str(PROFILE),
-                "--ssid",
-                values["wifi_ssid"],
-                "--server",
-                f"http://{computer_ip}:8080/6/",
-                "--timezone",
-                timezone_offset,
-                "--locale",
-                timezone_name,
-                "--send",
-            ],
-            cwd=compat,
-            env=provision_env,
-        )
-        input(
-            "\nReconnect this computer to the target Wi-Fi network. Wait for "
-            "the feeder to install Kickstart, then press Enter."
-        )
-        kickstart_ip = wait_for_host(args.kickstart_host, 80)
-        print(f"Kickstart is reachable at {kickstart_ip}")
+        return
 
-        recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
-        download_recovery(
-            recovery,
-            url=f"http://{kickstart_ip}/hub/flash_read",
-            username=values["kickstart_web_username"],
-            password=values["kickstart_web_password"],
-            cwd=project,
+    if detected is None:
+        computer_ip = prompt(
+            "This computer's address on the target Wi-Fi", detect_local_ip()
         )
-        if recovery.stat().st_size != 0x200000:
-            raise RuntimeError("Kickstart recovery download is not 2 MiB")
+        timezone_name = values["timezone"]
+        offset = datetime.now().astimezone().utcoffset()
+        timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
+        firewall_added = configure_firewall()
+        server: subprocess.Popen[bytes] | None = None
+        try:
+            server = subprocess.Popen(
+                [
+                    str(python),
+                    "serve_petkit_api.py",
+                    "--host",
+                    "0.0.0.0",
+                    "--port",
+                    "8080",
+                    "--profile",
+                    str(PROFILE),
+                    "--ota-image",
+                    str(transition),
+                ],
+                cwd=compat,
+            )
+            time.sleep(1)
+            if server.poll() is not None:
+                raise RuntimeError("the local Petkit API server did not start")
+            input(
+                "\nPut the feeder in setup mode, connect this computer to its "
+                "PETKIT_FEEDER_... Wi-Fi network, then press Enter."
+            )
+            provision_env = os.environ.copy()
+            provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
+            acknowledged = run_provisioner(
+                [
+                    str(python),
+                    "provision_petkit_device.py",
+                    "--profile",
+                    str(PROFILE),
+                    "--ssid",
+                    values["wifi_ssid"],
+                    "--server",
+                    f"http://{computer_ip}:8080/6/",
+                    "--timezone",
+                    timezone_offset,
+                    "--locale",
+                    timezone_name,
+                    "--send",
+                ],
+                cwd=compat,
+                env=provision_env,
+            )
+            if not acknowledged:
+                print(
+                    "The commit was sent, but the SoftAP connection ended before "
+                    "acknowledgement. The installer will verify the result on the "
+                    "target network."
+                )
+            input(
+                "\nReconnect this computer to the target Wi-Fi network, then press "
+                "Enter. Keep this installer running while the feeder downloads and "
+                "boots Kickstart."
+            )
+            detected = wait_for_firmware(
+                python,
+                project,
+                [args.kickstart_host, args.final_host],
+                values["api_key"],
+                KICKSTART_PROJECT,
+                expected_mac,
+            )
+        finally:
+            if server is not None:
+                server.terminate()
+                try:
+                    server.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    server.kill()
+            if firewall_added:
+                subprocess.run(
+                    ["sudo", "firewall-cmd", "--remove-port=8080/tcp"],
+                    check=False,
+                )
+
+    assert detected is not None
+    if detected.identity.project_name != KICKSTART_PROJECT:
+        raise RuntimeError(
+            f"expected Kickstart, but {detected.identity.project_name!r} is running"
+        )
+    expected_mac = normalize_mac(detected.identity.mac_address)
+    save_expected_mac(state_path, detected.identity.mac_address)
+    kickstart_host = detected.host
+    print(
+        f"Kickstart is authenticated at {kickstart_host} on feeder "
+        f"{detected.identity.mac_address}."
+    )
+
+    recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
+    download_recovery(
+        recovery,
+        url=f"http://{kickstart_host}/hub/flash_read",
+        username=values["kickstart_web_username"],
+        password=values["kickstart_web_password"],
+        cwd=project,
+    )
+    if recovery.stat().st_size != 0x200000:
+        raise RuntimeError("Kickstart recovery download is not 2 MiB")
+
+    migration_error: subprocess.CalledProcessError | None = None
+    try:
         run_authenticated_curl(
             [
                 "--form",
                 f"firmware=@{factory}",
-                f"http://{kickstart_ip}/hub/migrate?confirm=replace-vendor-bootloader",
+                f"http://{kickstart_host}/hub/migrate?confirm=replace-vendor-bootloader",
             ],
             username=values["kickstart_web_username"],
             password=values["kickstart_web_password"],
             cwd=project,
         )
-        print("\nMigration image written; waiting for the final ESPHome API.")
-        final_ip = wait_for_host(args.final_host, 6053)
+    except subprocess.CalledProcessError as error:
+        if not migration_result_is_ambiguous(error):
+            raise
+        migration_error = error
         print(
-            f"Final ESPHome firmware is reachable at {final_ip}. "
-            f"Keep the recovery image at {recovery}."
+            "The migration response was lost or rejected. The installer will "
+            "identify the firmware now running before deciding the outcome."
         )
-    finally:
-        server.terminate()
-        try:
-            server.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            server.kill()
-        if firewall_added:
-            subprocess.run(
-                ["sudo", "firewall-cmd", "--remove-port=8080/tcp"], check=False
-            )
+
+    print("\nWaiting for the authenticated final ESPHome firmware.")
+    try:
+        final = wait_for_firmware(
+            python,
+            project,
+            [args.final_host, kickstart_host],
+            values["api_key"],
+            FINAL_PROJECT,
+            expected_mac,
+        )
+    except RuntimeError as error:
+        if migration_error is not None:
+            raise RuntimeError(
+                "the migration response was indeterminate and the final firmware "
+                "could not be verified; rerun the installer to reconcile the "
+                "current firmware before another upload"
+            ) from error
+        raise
+
+    save_expected_mac(state_path, final.identity.mac_address)
+    print(
+        f"Final ESPHome firmware {final.identity.project_name} is authenticated "
+        f"at {final.host} on feeder {final.identity.mac_address}. Keep the "
+        f"recovery image at {recovery}."
+    )
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import stat
 import subprocess
 import tempfile
@@ -321,6 +322,245 @@ class DeviceIdentityTest(unittest.TestCase):
                 install.read_device_identity(
                     Path("python"), Path("/project"), "wrong.local", "key"
                 )
+
+
+class FirmwarePhaseTest(unittest.TestCase):
+    def identity(
+        self,
+        project_name: str,
+        mac: str = "E8:68:E7:00:00:01",
+    ) -> install.DeviceIdentity:
+        return install.DeviceIdentity(
+            name="petkit",
+            friendly_name="Petkit",
+            mac_address=mac,
+            project_name=project_name,
+            project_version="0.1",
+        )
+
+    def test_detects_final_project_by_authenticated_identity(self) -> None:
+        final = self.identity(install.FINAL_PROJECT)
+        with mock.patch.object(install, "read_device_identity", return_value=final):
+            detected = install.detect_running_firmware(
+                Path("python"), Path("/project"), ["192.0.2.10"], "key", None
+            )
+
+        assert detected is not None
+        self.assertEqual(detected.identity.project_name, install.FINAL_PROJECT)
+
+    def test_rejects_a_different_physical_device(self) -> None:
+        final = self.identity(install.FINAL_PROJECT, "E8:68:E7:00:00:02")
+        with mock.patch.object(install, "read_device_identity", return_value=final):
+            with self.assertRaises(install.DeviceMismatchError):
+                install.detect_running_firmware(
+                    Path("python"),
+                    Path("/project"),
+                    ["192.0.2.10"],
+                    "key",
+                    "e868e7000001",
+                )
+
+    def test_waits_past_kickstart_for_final_project(self) -> None:
+        kickstart = install.DetectedFirmware(
+            "192.0.2.10", self.identity(install.KICKSTART_PROJECT)
+        )
+        final = install.DetectedFirmware(
+            "192.0.2.10", self.identity(install.FINAL_PROJECT)
+        )
+        with (
+            mock.patch.object(
+                install, "detect_running_firmware", side_effect=[kickstart, final]
+            ),
+            mock.patch.object(install.time, "sleep"),
+        ):
+            detected = install.wait_for_firmware(
+                Path("python"),
+                Path("/project"),
+                ["192.0.2.10"],
+                "key",
+                install.FINAL_PROJECT,
+                "e868e7000001",
+                timeout=5,
+            )
+
+        self.assertEqual(detected.identity.project_name, install.FINAL_PROJECT)
+
+    def test_install_state_preserves_expected_mac_privately(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "install-state.json"
+            install.save_expected_mac(path, "E8:68:E7:00:00:01")
+
+            self.assertEqual(install.load_expected_mac(path), "e868e7000001")
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+
+class OrchestrationResultTest(unittest.TestCase):
+    def test_provisioner_accepts_only_confirmed_or_indeterminate_commit(self) -> None:
+        with mock.patch.object(
+            install.subprocess,
+            "run",
+            side_effect=[
+                subprocess.CompletedProcess([], 0),
+                subprocess.CompletedProcess([], 3),
+                subprocess.CompletedProcess([], 2),
+            ],
+        ):
+            self.assertTrue(
+                install.run_provisioner([], cwd=Path("."), env={})
+            )
+            self.assertFalse(
+                install.run_provisioner([], cwd=Path("."), env={})
+            )
+            with self.assertRaises(subprocess.CalledProcessError):
+                install.run_provisioner([], cwd=Path("."), env={})
+
+    def test_only_transport_loss_makes_migration_result_ambiguous(self) -> None:
+        self.assertTrue(
+            install.migration_result_is_ambiguous(
+                subprocess.CalledProcessError(56, ["curl"])
+            )
+        )
+        self.assertFalse(
+            install.migration_result_is_ambiguous(
+                subprocess.CalledProcessError(22, ["curl"])
+            )
+        )
+
+
+class MainResumeTest(unittest.TestCase):
+    SECRETS = {
+        "wifi_ssid": "test-network",
+        "wifi_password": "test-password",
+        "timezone": "Europe/Warsaw",
+        "fallback_ap_password": "test-fallback-password",
+        "kickstart_web_username": "admin",
+        "kickstart_web_password": "test-web-password",
+        "api_key": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=",
+    }
+
+    @staticmethod
+    def identity(project_name: str) -> install.DeviceIdentity:
+        return install.DeviceIdentity(
+            name="petkit-feeder",
+            friendly_name="Petkit Feeder",
+            mac_address="E8:68:E7:00:00:01",
+            project_name=project_name,
+            project_version="0.1",
+        )
+
+    def common_patches(self, project: Path) -> tuple[mock._patch, ...]:
+        compat = project.parent / "petkit-compat-server"
+        kickstart = project.parent / "esphome-kickstart"
+        compat.mkdir()
+        kickstart.mkdir()
+
+        def checkout(
+            _parent: Path,
+            name: str,
+            _url: str,
+            _revision: str,
+        ) -> Path:
+            if name == "petkit-compat-server":
+                return compat
+            return kickstart
+
+        return (
+            mock.patch.object(install, "__file__", str(project / "install.py")),
+            mock.patch.object(install, "ensure_checkout", side_effect=checkout),
+            mock.patch.object(install.shutil, "which", return_value="/usr/bin/curl"),
+            mock.patch.object(install, "run"),
+            mock.patch.object(
+                install,
+                "load_or_create_secrets",
+                return_value=self.SECRETS,
+            ),
+            mock.patch.object(install, "require_build_artifact"),
+            mock.patch.object(sys, "argv", ["install.py"]),
+        )
+
+    def test_rerun_stops_when_final_firmware_is_authenticated(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "petkit-element-mini-esphome"
+            (project / "esphome").mkdir(parents=True)
+            final = install.DetectedFirmware(
+                "petkit-feeder.local", self.identity(install.FINAL_PROJECT)
+            )
+            patches = self.common_patches(project)
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "detect_running_firmware", return_value=final
+                    )
+                )
+                popen = stack.enter_context(
+                    mock.patch.object(install.subprocess, "Popen")
+                )
+                download = stack.enter_context(
+                    mock.patch.object(install, "download_recovery")
+                )
+                upload = stack.enter_context(
+                    mock.patch.object(install, "run_authenticated_curl")
+                )
+                install.main()
+
+            popen.assert_not_called()
+            download.assert_not_called()
+            upload.assert_not_called()
+            self.assertEqual(
+                install.load_expected_mac(project / install.INSTALL_STATE),
+                "e868e7000001",
+            )
+
+    def test_rerun_from_kickstart_skips_stock_provisioning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "petkit-element-mini-esphome"
+            (project / "esphome").mkdir(parents=True)
+            kickstart = install.DetectedFirmware(
+                "petkit-kickstart.local", self.identity(install.KICKSTART_PROJECT)
+            )
+            final = install.DetectedFirmware(
+                "petkit-feeder.local", self.identity(install.FINAL_PROJECT)
+            )
+
+            def download(path: Path, **_kwargs: object) -> None:
+                path.write_bytes(b"R" * 0x200000)
+
+            patches = self.common_patches(project)
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "detect_running_firmware", return_value=kickstart
+                    )
+                )
+                wait = stack.enter_context(
+                    mock.patch.object(
+                        install, "wait_for_firmware", return_value=final
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "download_recovery", side_effect=download
+                    )
+                )
+                upload = stack.enter_context(
+                    mock.patch.object(install, "run_authenticated_curl")
+                )
+                popen = stack.enter_context(
+                    mock.patch.object(install.subprocess, "Popen")
+                )
+                provision = stack.enter_context(
+                    mock.patch.object(install, "run_provisioner")
+                )
+                install.main()
+
+            popen.assert_not_called()
+            provision.assert_not_called()
+            upload.assert_called_once()
+            self.assertEqual(wait.call_args.args[4], install.FINAL_PROJECT)
 
 if __name__ == "__main__":
     unittest.main()
