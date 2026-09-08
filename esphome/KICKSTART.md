@@ -2,7 +2,7 @@
 
 Petkit Kickstart is temporary firmware that lets the Fresh Element Mini move
 from its stock firmware to ESPHome over Wi-Fi. It runs on the feeder's own
-ESP8266; the separate Nuvoton motor controller keeps its existing firmware.
+ESP8266; the separate ISD91230 motor controller keeps its existing firmware.
 
 The migration needs two steps because the stock OTA updater and ESPHome use
 different image formats and flash layouts:
@@ -46,7 +46,7 @@ A user-bin does not contain the bootloader, the other slot, or the complete
 set of device configuration and calibration data.
 
 An **ESPHome factory image** establishes a different layout, starting at flash
-address zero, and uses the eboot bootloader. The stock updater cannot install
+address zero, and uses the eboot V1 layout. The stock updater cannot install
 that image directly. Kickstart solves this by booting as a V2 application first,
 then providing a separate installer for the factory image.
 
@@ -105,9 +105,10 @@ private because it can contain Petkit and Aliyun credentials.
 ### 4. Install the ESPHome factory image
 
 The authenticated `/hub/migrate` endpoint accepts the complete Petkit ESPHome
-factory image. Kickstart validates the image, writes the application first,
-and replaces the vendor bootloader with eboot last. The ESP8266 then reboots
-into the final feeder firmware.
+factory image. Kickstart writes the application during upload while holding
+the new bootloader in RAM. After validating the complete image and flash
+readback, Kickstart replaces the vendor bootloader with eboot and reboots into
+the final feeder firmware.
 
 Writing the bootloader last postpones the change in boot layout until the
 application has been written. It does not make the operation immune to power
@@ -134,7 +135,7 @@ bus and physical controls.
 | ESPHome native API | Network logs and Home Assistant connection |
 | UART1 / GPIO2 / board TX1 pad | Transmit-only serial logs |
 
-UART0, on GPIO1 and GPIO3, connects to the Nuvoton motor controller and is left
+UART0, on GPIO1 and GPIO3, connects to the ISD91230 motor controller and is left
 unused by Kickstart. The final feeder firmware uses UART0 for framed commands
 and status replies, while continuing to send serial logs through UART1.
 
