@@ -16,16 +16,15 @@
   image and install the final device configuration without a separate manual
   web upload. Retest that Home Assistant retains one device-registry entry and
   changes its displayed name after migration.
-- Prepare the generic component changes for the ESPHome Kickstart repository.
-  Keep device layout values in per-device YAML, remove local checkout paths
-  from published examples, and do not retain compatibility aliases for names
-  that have never been released.
-- Publish this repository. Pin the installer's compatibility-server and
-  Kickstart dependencies to reviewed tags or commits, pin the staged device
-  page's component source to a stable tag or commit, add publishable board
-  photographs, and submit the staged Fresh Element Mini page from the separate
-  `devices.esphome.io` checkout. The page and YAML already pass the current
-  devices.esphome.io validators.
+- Submit the generic V2-to-eboot components to ESPHome Kickstart. Keep device
+  layout values in per-device YAML, remove local checkout paths from published
+  examples, and do not retain compatibility aliases for names that have never
+  been released.
+- Publish the reviewed compatibility-server and Kickstart revisions used by
+  the installer, then publish and tag this repository. Pin the Fresh Element
+  Mini device page's component source to the resulting stable revision and
+  submit the page from the separate `devices.esphome.io` checkout. The product
+  image is present, and the page and YAML pass the current validators.
 - Ask `homeassistant-extras/petkit-device-cards` to recognize ESPHome Petkit
   devices by their ESPHome project metadata. Its card works with an explicitly
   selected Home Assistant device ID, but its visual editor currently lists only
