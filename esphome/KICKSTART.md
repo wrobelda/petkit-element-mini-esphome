@@ -191,9 +191,7 @@ non-OS SDK V2 user-bin format.
 The current bridge disables ordinary ESPHome OTA while the V2 layout is active
 and exposes a dedicated migration installer. Replacing that temporary interface
 with a transparent Kickstart OTA backend, and adding the reverse eboot V1 to
-non-OS V2 restoration path, are tracked in the project [TODO](../TODO.md). The
-reverse path has a separate [investigation
-brief](../research/ESP8266-EBOOT-V1-TO-NONOS-V2-PROMPT.md).
+non-OS V2 restoration path, are tracked in the project [TODO](../TODO.md).
 
 ## Home Assistant handoff
 
