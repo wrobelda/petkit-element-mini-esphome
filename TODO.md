@@ -16,7 +16,7 @@
   image and install the final device configuration without a separate manual
   web upload. Retest that Home Assistant retains one device-registry entry and
   changes its displayed name after migration.
-- Submit the generic V2-to-eboot components to ESPHome Kickstart. Keep device
+- Submit the generic non-OS V2-to-eboot V1 components to ESPHome Kickstart. Keep device
   layout values in per-device YAML, remove local checkout paths from published
   examples, and do not retain compatibility aliases for names that have never
   been released.

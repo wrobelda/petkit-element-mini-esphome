@@ -235,8 +235,9 @@ migration components directly from
 instead of carrying private copies. For the reusable algorithm and recovery
 API details, see the [non-OS V2 transition guide][transition-guide].
 
-The bridge supports migration from stock V2 firmware to eboot. It does not
-provide a reverse eboot-to-V2 installer; restoring stock requires UART access.
+The bridge supports migration from the stock non-OS V2 layout to ESPHome's
+eboot V1 layout. It does not provide a reverse eboot V1-to-non-OS V2 installer;
+restoring stock requires UART access.
 
 ## Applying the bridge to another feeder
 
