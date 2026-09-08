@@ -2,93 +2,105 @@
 
 ## Wireless installation and upstreaming
 
-- Replace the temporary `/hub/migrate` installer with an ESPHome OTA design
-  that understands V1/eboot and non-OS SDK V2 images. It must handle V1→V1,
-  V2→V2, and V2→V1 explicitly, with authenticated layout metadata,
-  safe write order, validation, and power-loss behavior. While Kickstart is
-  running, its OTA backend must detect the required transition and perform it
-  internally when Device Builder sends a normal OTA request; the user must not
-  call a separate route or select the migration manually. Implement and
-  demonstrate that behavior in ESPHome Kickstart first, then ask the ESPHome
-  and Kickstart maintainers whether ESPHome should absorb the backend or the
-  wider Kickstart project.
-- Make the Home Assistant/ESPHome Device Builder flow recognize a transition
-  image and install the final device configuration without a separate manual
-  web upload. Retest that Home Assistant retains one device-registry entry and
-  changes its displayed name after migration.
-- Submit the generic non-OS V2-to-eboot V1 components to ESPHome Kickstart. Keep device
-  layout values in per-device YAML, remove local checkout paths from published
-  examples, and do not retain compatibility aliases for names that have never
-  been released.
+### Normal ESPHome OTA handoff
+
+Replace the temporary `/hub/migrate` upload with a Kickstart OTA backend that
+accepts a normal authenticated request from ESPHome Device Builder and handles
+the layout transition internally. Users should not need to select a migration
+route or upload through a separate web interface.
+
+The backend must distinguish these update paths:
+
+- eboot V1 to eboot V1;
+- non-OS V2 to non-OS V2;
+- non-OS V2 to eboot V1.
+
+Define authenticated layout metadata, image validation, safe write order, and
+power-loss behavior for each path. Implement and demonstrate the backend in
+Kickstart before discussing whether ESPHome should absorb that backend or the
+wider Kickstart project.
+
+Make Home Assistant and Device Builder recognize the transition image and
+select the final device configuration. Verify that the automated handoff keeps
+one device-registry entry and updates its displayed name.
+
+### Publication
+
+- Submit the generic non-OS V2 to eboot V1 components to ESPHome Kickstart.
+  Keep hardware layout values in per-device YAML and public examples free of
+  private checkout paths. Remove compatibility aliases for unreleased names.
 - Publish the reviewed compatibility-server and Kickstart revisions used by
-  the installer, then publish and tag this repository. Pin the Fresh Element
-  Mini device page's component source to the resulting stable revision and
-  submit the page from the separate `devices.esphome.io` checkout. The product
-  image is present, and the page and YAML pass the current validators.
-- Ask `homeassistant-extras/petkit-device-cards` to recognize ESPHome Petkit
-  devices by their ESPHome project metadata. Its card works with an explicitly
-  selected Home Assistant device ID, but its visual editor currently lists only
-  devices from the cloud `petkit` integration. Do not give the local device
-  false cloud-integration identifiers.
-- Verify the transition profile on any additional Petkit hardware before
-  offering it. Confirm the MCU, real flash size, slot boundaries, protected
-  tail sectors, and stock hardware identifier rather than assuming all P530,
-  D2, D2-C, or `HW2` units are identical.
+  the installer, then publish and tag this repository.
+- Pin the Fresh Element Mini catalog page's component source to the stable
+  revision and submit the page from the `devices.esphome.io` checkout.
 
-## Feeder functionality
+### Additional integrations and devices
 
-- Design persistent offline feeding history jointly with ESPHome and Home
-  Assistant. ESPHome event responses carry no source timestamp, stable event
-  ID, replay cursor, or acknowledgement. Home Assistant can store a backdated
-  event through `async_fire(..., time_fired=...)`, while Feedreader demonstrates
-  a persisted deduplication cursor; external statistics are timestamped and
-  idempotent but apply to numeric statistics rather than discrete feed events.
-  A complete design needs durable device records, original timestamps, stable
-  IDs, query-since semantics, receiver-side deduplication, and acknowledgement.
-  Decide separately whether the Petkit cards justify a bounded current-day
-  schedule/status snapshot; that would be a Petkit convention, not a general
-  ESPHome event-replay mechanism.
-- Reconstruct the stock `FEED_FIRST` state transition and recovery policy. The
-  stock traces exercise its `FF 01 01 50` free-running path, while ordinary
-  fixed-amount feeds use the direct `N 01 01 50` counted path. Do not add the
-  first-feed path until its entry condition and safety behavior are known.
-- Weigh repeated 1, 2, and 3-serving samples with representative food. Live
-  tests already confirm that `N 01 01 50` advances the settled M0 wheel count
-  by N and completes the full door sequence; only the nominal weight remains
-  to be calibrated against kibble size, density, and hopper level.
-- Validate jammed-door and motion-timeout recovery on hardware. Normal door
-  open, close, and sequence-matched completion behavior passed in the 1, 2,
-  and 3-serving tests.
+- Add recognition of ESPHome Petkit devices to the visual editor in
+  `homeassistant-extras/petkit-device-cards`, using ESPHome project metadata.
+  An explicitly selected Home Assistant device ID works, but the editor lists
+  only devices from the cloud `petkit` integration. Keep the local device's
+  actual integration identity.
+- Validate each additional hardware profile before offering firmware. Confirm
+  the MCU, flash size, slot boundaries, protected tail sectors, and stock
+  hardware identifier; product labels such as P530, D2, D2-C, and `HW2` do not
+  establish compatibility.
+
+## Offline feeding history
+
+Design persistent feeding-history replay jointly with ESPHome and Home
+Assistant. Events completed while Home Assistant is disconnected need:
+
+- durable device records with original timestamps and stable event IDs;
+- queries for events since a saved cursor;
+- receiver-side deduplication and acknowledgement.
+
+ESPHome event responses do not provide those replay fields. The design must
+preserve the distinction between discrete feed events and numeric statistics.
+Decide separately whether the Petkit cards need a bounded snapshot of the
+current day's schedule and status; that snapshot would be a Petkit convention,
+not a general ESPHome replay mechanism.
+
+## Feeder operation and recovery
+
+### Counted feeding and manual controls
+
+- Weigh repeated 1-, 2-, and 3-serving samples with representative food to
+  calibrate the nominal 5 g conversion against kibble size, density, and hopper
+  level.
+- Validate held-button feeding on hardware: one serving at a time, a 100 ms gap
+  between completions and new requests, and an open outlet between servings.
+  Release the button throughout the gap to confirm that no further serving
+  starts. The press is debounced, while release must stop repetition immediately.
+- Verify the active level and debounce behavior of the Wi-Fi/reset button.
+
+### Startup, faults, and timeouts
+
+- Validate jammed-door and motion-timeout recovery on hardware.
 - Open the outlet, reboot only the ESP8266, and verify that the post-handshake
-  close command is acknowledged and physically closes it. Stock checks two
-  door-error bits and dispatches repair events from its state-report path, but
-  normal cold-boot traces do not contain an unconditional close command and it
-  is not yet known whether an open outlet at boot raises either fault bit.
-- Hardware-verify the 100 ms manual-feed repeat delay now recovered from the
-  stock state machine: a held press should request one serving at a time, keep
-  the outlet open during the 100 ms gap, and close it when release prevents the
-  next request. Test release throughout that gap now that the press edge is
-  debounced but the release edge stops repetition immediately. The
-  `petkit_manual_feed.sal` recording from
-  `earlynerd/petkit-serial-bus` has no door or dispenser packets, so it cannot
-  independently verify that timing.
-- Extract the feed transaction state machine from ESPHome I/O and add native
-  tests for matched and stale completion frames, open and close timeouts,
-  motion-timeout reset, post-reset close, initialization timeouts, and held
-  manual-feed release.
-- Determine which boot configuration packets are required instead of replaying
-  the complete observed sequence by assumption.
-- Hardware-test an ESP8266-only reboot while the M0 remains running. The local
-  firmware starts the complete handshake after every ESP8266 boot without
-  waiting for an M0 power-on announcement; confirm that the running M0 accepts
-  every step and the final close command.
-- Establish the polarity and meaning of both status bytes, then identify units
-  and scaling for all four raw 16-bit status values. Calibrate the food sensor
-  with its optical assembly connected and installed in the container.
-- Finish the two-LED policy: resolve the upper/Wi-Fi mode-0 behavior, reproduce
-  permanent Wi-Fi-indicator disable and night mode, determine the lower
-  food-indicator state policy, and match the stock startup timing.
-- Verify the active level and debounce behavior of the Wi-Fi button. GPIO13's
-  manual-feed input is verified active-low with the stock internal pull-up: it
-  measures about 3.2 V released and 0 V pressed. Re-test held-button repetition
-  after restoring its motor callbacks.
+  close command is acknowledged and physically closes the outlet.
+- Confirm that an ISD91230 motor controller already running at ESP8266 startup
+  accepts the complete boot handshake and final close command without a fresh
+  motor-controller power-on announcement.
+- Determine which boot configuration packets are required.
+- Reconstruct the stock `FEED_FIRST` entry condition and recovery policy before
+  implementing its `FF 01 01 50` free-running motion. Ordinary fixed-amount feeds
+  use the direct `N 01 01 50` counted path.
+
+Extract the feed transaction state machine from ESPHome I/O and add native
+coverage for:
+
+- matched and stale completion frames;
+- open, close, motion, and initialization timeouts;
+- motor-controller reset and post-reset close;
+- held manual feeding and button release.
+
+## Sensors and indicators
+
+- Establish the active polarities and physical meaning of the door and wheel
+  sensor levels.
+- Calibrate food detection with the optical assembly connected and installed
+  in the container.
+- Resolve upper/Wi-Fi indicator mode 0, permanent disable, and night mode.
+- Determine the lower/food indicator's state policy and reproduce stock startup
+  timing.
