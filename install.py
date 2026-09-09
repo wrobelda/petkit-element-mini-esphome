@@ -54,6 +54,7 @@ KICKSTART_PROJECT = "petkit.fresh-element-mini-kickstart"
 FINAL_PROJECT = "petkit.fresh-element-mini"
 PROVISION_COMMIT_OUTCOME_UNKNOWN_EXIT = 3
 AMBIGUOUS_MIGRATION_CURL_EXIT_CODES = {18, 28, 52, 55, 56}
+PETKIT_SOFTAP_PREFIX = "PETKIT"
 
 
 class DeviceMismatchError(RuntimeError):
@@ -211,6 +212,165 @@ def detect_local_ip() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.connect(("192.0.2.1", 9))
         return str(sock.getsockname()[0])
+
+
+def current_wifi_ssid() -> str | None:
+    nmcli = shutil.which("nmcli")
+    if nmcli is not None:
+        result = subprocess.run(
+            [
+                nmcli,
+                "--terse",
+                "--escape",
+                "no",
+                "--fields",
+                "IN-USE,SSID",
+                "device",
+                "wifi",
+                "list",
+                "--rescan",
+                "no",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        for line in result.stdout.splitlines():
+            if line.startswith("*:"):
+                return line[2:]
+        return None
+
+    networksetup = shutil.which("networksetup")
+    if networksetup is not None:
+        ports = subprocess.run(
+            [networksetup, "-listallhardwareports"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if ports.returncode != 0:
+            return None
+        interface: str | None = None
+        lines = ports.stdout.splitlines()
+        for index, line in enumerate(lines):
+            if line in {"Hardware Port: Wi-Fi", "Hardware Port: AirPort"}:
+                for detail in lines[index + 1 : index + 4]:
+                    if detail.startswith("Device: "):
+                        interface = detail.removeprefix("Device: ")
+                        break
+                break
+        if interface is None:
+            return None
+        current = subprocess.run(
+            [networksetup, "-getairportnetwork", interface],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        prefix = "Current Wi-Fi Network: "
+        if current.returncode == 0 and current.stdout.startswith(prefix):
+            return current.stdout.removeprefix(prefix).strip()
+        return None
+
+    raise RuntimeError(
+        "automatic Wi-Fi detection requires nmcli on Linux or networksetup on macOS"
+    )
+
+
+def available_wifi_ssids() -> list[str]:
+    nmcli = shutil.which("nmcli")
+    if nmcli is not None:
+        result = subprocess.run(
+            [
+                nmcli,
+                "--terse",
+                "--escape",
+                "no",
+                "--fields",
+                "SSID",
+                "device",
+                "wifi",
+                "list",
+                "--rescan",
+                "yes",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return []
+        return sorted({line for line in result.stdout.splitlines() if line})
+
+    system_profiler = shutil.which("system_profiler")
+    if system_profiler is not None:
+        result = subprocess.run(
+            [system_profiler, "SPAirPortDataType", "-json"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return []
+        try:
+            report = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return []
+        networks: set[str] = set()
+
+        def collect(value: object, *, network_list: bool = False) -> None:
+            if isinstance(value, dict):
+                name = value.get("_name")
+                if network_list and isinstance(name, str):
+                    networks.add(name)
+                for key, child in value.items():
+                    collect(
+                        child,
+                        network_list=network_list
+                        or key
+                        in {
+                            "spairport_current_network_information",
+                            "spairport_other_local_wireless_networks",
+                        },
+                    )
+            elif isinstance(value, list):
+                for child in value:
+                    collect(child, network_list=network_list)
+
+        collect(report)
+        return sorted(networks)
+
+    raise RuntimeError(
+        "automatic Wi-Fi scanning requires nmcli on Linux or system_profiler "
+        "on macOS"
+    )
+
+
+def wait_for_available_wifi_networks(prefix: str, *, timeout: int = 180) -> list[str]:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        matches = [ssid for ssid in available_wifi_ssids() if ssid.startswith(prefix)]
+        if matches:
+            return matches
+        time.sleep(2)
+    raise RuntimeError(
+        f"no Wi-Fi network beginning with {prefix!r} appeared within {timeout} seconds"
+    )
+
+
+def wait_for_wifi_network(prefix: str, *, timeout: int = 180) -> str:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        ssid = current_wifi_ssid()
+        if ssid is not None and ssid.startswith(prefix):
+            return ssid
+        time.sleep(1)
+    raise RuntimeError(
+        f"a Wi-Fi network beginning with {prefix!r} was not connected within "
+        f"{timeout} seconds"
+    )
 
 
 def read_device_identity(
@@ -592,6 +752,21 @@ def main() -> None:
                 "\nPut the feeder in setup mode. After the confirmation beep, "
                 "press Enter.\n"
             )
+            softaps = wait_for_available_wifi_networks(PETKIT_SOFTAP_PREFIX)
+            print("\nAvailable Petkit setup networks:")
+            for ssid in softaps:
+                print(f"- {ssid}")
+            if len(softaps) > 1:
+                print(
+                    "The feeder network is normally named like "
+                    "PETKIT_FEEDER_xyz."
+                )
+            print(
+                "Connect this computer to the correct PETKIT_FEEDER_xyz Wi-Fi "
+                "network. The installer will continue automatically."
+            )
+            softap_ssid = wait_for_wifi_network(PETKIT_SOFTAP_PREFIX)
+            print(f"Connected to {softap_ssid!r}.")
             server = subprocess.Popen(
                 [
                     str(python),
@@ -610,10 +785,6 @@ def main() -> None:
             time.sleep(1)
             if server.poll() is not None:
                 raise RuntimeError("the local Petkit API server did not start")
-            input(
-                "\nConnect this computer to the PETKIT_FEEDER_xyz Wi-Fi network, "
-                "then press Enter.\n"
-            )
             provision_env = os.environ.copy()
             provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
             acknowledged = run_provisioner(

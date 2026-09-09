@@ -389,6 +389,51 @@ class FirmwarePhaseTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
 
+class WifiDetectionTest(unittest.TestCase):
+    def test_lists_unique_networkmanager_ssids(self) -> None:
+        result = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout="PETKIT_FEEDER_B\nHome\nPETKIT_FEEDER_A\nPETKIT_FEEDER_B\n",
+            stderr="",
+        )
+        with (
+            mock.patch.object(install.shutil, "which", return_value="/usr/bin/nmcli"),
+            mock.patch.object(install.subprocess, "run", return_value=result),
+        ):
+            self.assertEqual(
+                install.available_wifi_ssids(),
+                ["Home", "PETKIT_FEEDER_A", "PETKIT_FEEDER_B"],
+            )
+
+    def test_reads_active_networkmanager_ssid(self) -> None:
+        result = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=" :Home\n*:PETKIT_FEEDER_A\n",
+            stderr="",
+        )
+        with (
+            mock.patch.object(install.shutil, "which", return_value="/usr/bin/nmcli"),
+            mock.patch.object(install.subprocess, "run", return_value=result),
+        ):
+            self.assertEqual(install.current_wifi_ssid(), "PETKIT_FEEDER_A")
+
+    def test_waits_until_a_petkit_network_appears(self) -> None:
+        with (
+            mock.patch.object(
+                install,
+                "available_wifi_ssids",
+                side_effect=[["Home"], ["PETKIT_PURIFIER", "PETKIT_FEEDER_A"]],
+            ),
+            mock.patch.object(install.time, "sleep"),
+        ):
+            self.assertEqual(
+                install.wait_for_available_wifi_networks("PETKIT", timeout=5),
+                ["PETKIT_PURIFIER", "PETKIT_FEEDER_A"],
+            )
+
+
 class OrchestrationResultTest(unittest.TestCase):
     def test_provisioner_accepts_only_confirmed_or_indeterminate_commit(self) -> None:
         with mock.patch.object(
@@ -554,7 +599,7 @@ class MainResumeTest(unittest.TestCase):
             upload.assert_called_once()
             self.assertEqual(wait.call_args.args[4], install.FINAL_PROJECT)
 
-    def test_server_starts_after_setup_before_softap_connection(self) -> None:
+    def test_server_starts_after_softap_connection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "petkit-element-mini-esphome"
             (project / "esphome").mkdir(parents=True)
@@ -571,8 +616,6 @@ class MainResumeTest(unittest.TestCase):
             def input_answer(message: str) -> str:
                 if "Put the feeder in setup mode" in message:
                     events.append("setup-confirmed")
-                elif "Connect this computer to the PETKIT_FEEDER_xyz" in message:
-                    events.append("softap-connected")
                 elif "Reconnect this computer" in message:
                     events.append("regular-wifi-reconnected")
                 return ""
@@ -633,6 +676,21 @@ class MainResumeTest(unittest.TestCase):
                     )
                 )
                 stack.enter_context(
+                    mock.patch.object(
+                        install,
+                        "wait_for_available_wifi_networks",
+                        return_value=["PETKIT_FEEDER_test"],
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install,
+                        "wait_for_wifi_network",
+                        side_effect=lambda _prefix: events.append("softap-connected")
+                        or "PETKIT_FEEDER_test",
+                    )
+                )
+                stack.enter_context(
                     mock.patch.object(install, "prompt", return_value="10.0.0.100")
                 )
                 stack.enter_context(
@@ -648,8 +706,8 @@ class MainResumeTest(unittest.TestCase):
                 events,
                 [
                     "setup-confirmed",
-                    "server-started",
                     "softap-connected",
+                    "server-started",
                     "provisioned",
                     "regular-wifi-reconnected",
                 ],
