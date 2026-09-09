@@ -979,7 +979,7 @@ def main() -> None:
         return
 
     if detected is None:
-        print("\nPhase 1 of 2: install the temporary Kickstart bridge.")
+        print("\n🔹 Phase 1 of 2: install the temporary Kickstart bridge.")
         computer_ip = prompt(
             "This computer's IP address on the regular 2.4 GHz Wi-Fi network",
             detect_local_ip(),
@@ -1146,7 +1146,7 @@ def main() -> None:
         f"{detected.identity.mac_address}."
     )
 
-    print("\nPhase 2 of 2: install the final ESPHome feeder firmware.")
+    print("\n🔹 Phase 2 of 2: install the final ESPHome feeder firmware.")
     recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
     print("Saving the 2 MiB recovery image...")
     download_recovery(
@@ -1205,9 +1205,11 @@ def main() -> None:
 
     save_expected_mac(state_path, final.identity.mac_address)
     print(
+        "\n✅ Installation complete.\n"
         f"Final ESPHome firmware {final.identity.project_name} is authenticated "
-        f"at {final.host} on feeder {final.identity.mac_address}. Keep the "
-        f"recovery image at {recovery}."
+        f"at {final.host} on feeder {final.identity.mac_address}.\n\n"
+        "⚠️  Keep this recovery image:\n"
+        f"{recovery}\n"
     )
 
 
