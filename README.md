@@ -159,7 +159,7 @@ export ESPHOME_WIFI_PASSWORD="$(security find-generic-password \
 ```
 
 Hold the feeder's Wi-Fi/reset button for about five seconds, until the long
-confirmation beep. Connect this computer to the `PETKIT_FEEDER_...` network,
+confirmation beep. Connect this computer to the `PETKIT_FEEDER_xyz` network,
 then run:
 
 ```sh

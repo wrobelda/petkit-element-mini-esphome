@@ -554,5 +554,106 @@ class MainResumeTest(unittest.TestCase):
             upload.assert_called_once()
             self.assertEqual(wait.call_args.args[4], install.FINAL_PROJECT)
 
+    def test_server_starts_after_setup_before_softap_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "petkit-element-mini-esphome"
+            (project / "esphome").mkdir(parents=True)
+            kickstart = install.DetectedFirmware(
+                "petkit-kickstart.local", self.identity(install.KICKSTART_PROJECT)
+            )
+            final = install.DetectedFirmware(
+                "petkit-feeder.local", self.identity(install.FINAL_PROJECT)
+            )
+            events: list[str] = []
+            server = mock.MagicMock()
+            server.poll.return_value = None
+
+            def input_answer(message: str) -> str:
+                if "Put the feeder in setup mode" in message:
+                    events.append("setup-confirmed")
+                elif "Connect this computer to the PETKIT_FEEDER_xyz" in message:
+                    events.append("softap-connected")
+                elif "Reconnect this computer" in message:
+                    events.append("regular-wifi-reconnected")
+                return ""
+
+            def start_server(*_args: object, **_kwargs: object) -> mock.MagicMock:
+                events.append("server-started")
+                return server
+
+            def provision(*_args: object, **_kwargs: object) -> bool:
+                events.append("provisioned")
+                return True
+
+            def wait_for_firmware(
+                _python: Path,
+                _project: Path,
+                _hosts: list[str],
+                _api_key: str,
+                expected_project: str,
+                _expected_mac: str | None,
+            ) -> install.DetectedFirmware:
+                if expected_project == install.KICKSTART_PROJECT:
+                    return kickstart
+                return final
+
+            def download(path: Path, **_kwargs: object) -> None:
+                path.write_bytes(b"R" * 0x200000)
+
+            patches = self.common_patches(project)
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "detect_running_firmware", return_value=None
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install,
+                        "wait_for_firmware",
+                        side_effect=wait_for_firmware,
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "download_recovery", side_effect=download
+                    )
+                )
+                stack.enter_context(mock.patch.object(install, "run_authenticated_curl"))
+                stack.enter_context(
+                    mock.patch.object(
+                        install.subprocess, "Popen", side_effect=start_server
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "run_provisioner", side_effect=provision
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(install, "prompt", return_value="10.0.0.100")
+                )
+                stack.enter_context(
+                    mock.patch.object(install, "configure_firewall", return_value=False)
+                )
+                stack.enter_context(mock.patch.object(install.time, "sleep"))
+                stack.enter_context(
+                    mock.patch("builtins.input", side_effect=input_answer)
+                )
+                install.main()
+
+            self.assertEqual(
+                events,
+                [
+                    "setup-confirmed",
+                    "server-started",
+                    "softap-connected",
+                    "provisioned",
+                    "regular-wifi-reconnected",
+                ],
+            )
+
 if __name__ == "__main__":
     unittest.main()

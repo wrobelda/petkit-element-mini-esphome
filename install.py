@@ -184,7 +184,13 @@ def load_or_create_secrets(path: Path, python: Path) -> dict[str, str]:
     if path.exists():
         values = read_yaml_secrets(path, python)
         path.chmod(0o600)
-        print(f"Using existing {path}")
+        if values.get("wifi_ssid"):
+            print(
+                f"Using existing {path} for regular 2.4 GHz Wi-Fi network "
+                f"{values['wifi_ssid']!r}"
+            )
+        else:
+            print(f"Using existing {path}")
         return values
     return write_secrets(path)
 
@@ -582,6 +588,10 @@ def main() -> None:
         firewall_added = configure_firewall()
         server: subprocess.Popen[bytes] | None = None
         try:
+            input(
+                "\nPut the feeder in setup mode. After the confirmation beep, "
+                "press Enter.\n"
+            )
             server = subprocess.Popen(
                 [
                     str(python),
@@ -601,8 +611,8 @@ def main() -> None:
             if server.poll() is not None:
                 raise RuntimeError("the local Petkit API server did not start")
             input(
-                "\nPut the feeder in setup mode, connect this computer to its "
-                "PETKIT_FEEDER_... Wi-Fi network, then press Enter."
+                "\nConnect this computer to the PETKIT_FEEDER_xyz Wi-Fi network, "
+                "then press Enter.\n"
             )
             provision_env = os.environ.copy()
             provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
@@ -629,7 +639,7 @@ def main() -> None:
                 print(
                     "The commit was sent, but the SoftAP connection ended before "
                     "acknowledgement. The installer will verify the result on the "
-                    "target network."
+                    "regular 2.4 GHz Wi-Fi network."
                 )
             input(
                 "\nReconnect this computer to the regular 2.4 GHz Wi-Fi network, "
