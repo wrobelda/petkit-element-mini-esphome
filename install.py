@@ -947,7 +947,14 @@ def main() -> None:
         server: subprocess.Popen[bytes] | None = None
         server_log = None
         server_log_path = project / "local-cache" / "compat-server.log"
+        server_event_log_path = project / "local-cache" / "compat-server-events.log"
         try:
+            descriptor = os.open(
+                server_event_log_path,
+                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                0o600,
+            )
+            os.close(descriptor)
             popen_output: dict[str, object] = {}
             if not args.debug:
                 descriptor = os.open(
@@ -974,6 +981,8 @@ def main() -> None:
                     str(PROFILE),
                     "--ota-image",
                     str(transition),
+                    "--event-log",
+                    str(server_event_log_path),
                 ],
                 cwd=compat,
                 **popen_output,
@@ -985,8 +994,8 @@ def main() -> None:
                 "Checking whether the stock feeder already contacts this "
                 "computer..."
             )
-            already_provisioned = not args.debug and wait_for_server_event(
-                server_log_path,
+            already_provisioned = wait_for_server_event(
+                server_event_log_path,
                 server,
                 "request",
                 required_fields={
@@ -1038,50 +1047,49 @@ def main() -> None:
                     "\nReconnect this computer to the regular 2.4 GHz Wi-Fi "
                     "network, then press Enter.\n"
                 )
-            if not args.debug:
-                if already_provisioned:
-                    print("✓ The feeder contacted this computer.")
-                else:
-                    print("Waiting for the feeder to contact this computer...")
-                    if not wait_for_server_event(
-                        server_log_path,
-                        server,
-                        "request",
-                        required_fields={
-                            "method": "POST",
-                            "path": "/6/feedermini/dev_ota_check",
-                        },
-                        timeout=180,
-                        progress_label="the feeder to contact this computer",
-                        delayed_message=(
-                            "No connection has arrived yet. TCP port 8080 on "
-                            f"{computer_ip} must be reachable from the regular "
-                            "Wi-Fi network. On another device connected to that "
-                            "network, open this address in a web browser:\n\n"
-                            f"  http://{computer_ip}:8080/\n\n"
-                            "A response showing status 'ready' proves that the "
-                            "server is reachable."
-                        ),
-                    ):
-                        raise RuntimeError(
-                            "the feeder did not contact the local compatibility "
-                            "server within 180 seconds"
-                        )
-                    print("✓ The feeder contacted this computer.")
-                print("Waiting for the feeder to download Kickstart...")
+            if already_provisioned:
+                print("✓ The feeder contacted this computer.")
+            else:
+                print("Waiting for the feeder to contact this computer...")
                 if not wait_for_server_event(
-                    server_log_path,
+                    server_event_log_path,
                     server,
-                    "ota_transfer_complete",
-                    required_fields={"image_complete": True},
+                    "request",
+                    required_fields={
+                        "method": "POST",
+                        "path": "/6/feedermini/dev_ota_check",
+                    },
                     timeout=180,
-                    progress_label="the Kickstart download",
+                    progress_label="the feeder to contact this computer",
+                    delayed_message=(
+                        "No connection has arrived yet. TCP port 8080 on "
+                        f"{computer_ip} must be reachable from the regular "
+                        "Wi-Fi network. On another device connected to that "
+                        "network, open this address in a web browser:\n\n"
+                        f"  http://{computer_ip}:8080/\n\n"
+                        "A response showing status 'ready' proves that the "
+                        "server is reachable."
+                    ),
                 ):
                     raise RuntimeError(
-                        "the feeder did not finish downloading Kickstart within "
-                        "180 seconds"
+                        "the feeder did not contact the local compatibility "
+                        "server within 180 seconds"
                     )
-                print("✓ Kickstart download completed.")
+                print("✓ The feeder contacted this computer.")
+            print("Waiting for the feeder to download Kickstart...")
+            if not wait_for_server_event(
+                server_event_log_path,
+                server,
+                "ota_transfer_complete",
+                required_fields={"image_complete": True},
+                timeout=180,
+                progress_label="the Kickstart download",
+            ):
+                raise RuntimeError(
+                    "the feeder did not finish downloading Kickstart within "
+                    "180 seconds"
+                )
+            print("✓ Kickstart download completed.")
             print("Waiting for the temporary Kickstart bridge to boot...")
             detected = wait_for_firmware(
                 python,

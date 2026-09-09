@@ -1012,5 +1012,79 @@ class MainResumeTest(unittest.TestCase):
                 },
             )
 
+    def test_debug_keeps_existing_provisioning_and_download_waits(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "petkit-element-mini-esphome"
+            (project / "esphome").mkdir(parents=True)
+            kickstart = install.DetectedFirmware(
+                "petkit-kickstart.local", self.identity(install.KICKSTART_PROJECT)
+            )
+            final = install.DetectedFirmware(
+                "petkit-feeder.local", self.identity(install.FINAL_PROJECT)
+            )
+            server = mock.MagicMock()
+            server.poll.return_value = None
+
+            def download(path: Path, **_kwargs: object) -> None:
+                path.write_bytes(b"R" * 0x200000)
+
+            patches = self.common_patches(project)
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(
+                    mock.patch.object(sys, "argv", ["install.py", "--debug"])
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "detect_running_firmware", return_value=None
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install,
+                        "wait_for_firmware",
+                        side_effect=[kickstart, final],
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "download_recovery", side_effect=download
+                    )
+                )
+                stack.enter_context(mock.patch.object(install, "run_authenticated_curl"))
+                popen = stack.enter_context(
+                    mock.patch.object(
+                        install.subprocess, "Popen", return_value=server
+                    )
+                )
+                wait = stack.enter_context(
+                    mock.patch.object(
+                        install,
+                        "wait_for_server_event",
+                        side_effect=[True, True],
+                    )
+                )
+                provision = stack.enter_context(
+                    mock.patch.object(install, "run_provisioner")
+                )
+                connect = stack.enter_context(
+                    mock.patch.object(install, "connect_to_petkit_setup_network")
+                )
+                user_input = stack.enter_context(mock.patch("builtins.input"))
+                stack.enter_context(
+                    mock.patch.object(install, "prompt", return_value="10.0.0.100")
+                )
+                stack.enter_context(mock.patch.object(install.time, "sleep"))
+                install.main()
+
+            provision.assert_not_called()
+            connect.assert_not_called()
+            user_input.assert_not_called()
+            self.assertEqual(wait.call_count, 2)
+            self.assertNotIn("stdout", popen.call_args.kwargs)
+            command = popen.call_args.args[0]
+            self.assertIn("--event-log", command)
+
 if __name__ == "__main__":
     unittest.main()
