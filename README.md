@@ -50,6 +50,9 @@ cd petkit-element-mini-esphome
 python3 install.py
 ```
 
+Run `python3 install.py --debug` to show the commands and diagnostic output
+hidden during a normal installation.
+
 Use the manual procedure below when developing the firmware or diagnosing a
 failed stage.
 
