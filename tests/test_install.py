@@ -656,6 +656,24 @@ class OrchestrationResultTest(unittest.TestCase):
         )
 
 
+class EntrypointTest(unittest.TestCase):
+    def test_expected_timeout_exits_without_reraising(self) -> None:
+        with (
+            mock.patch.object(
+                install,
+                "main",
+                side_effect=install.InstallationTimeout("download took too long"),
+            ),
+            mock.patch("builtins.print") as output,
+        ):
+            self.assertEqual(install.cli(), 1)
+
+        output.assert_called_once_with(
+            "\n⏱️  Installation timed out: download took too long",
+            file=sys.stderr,
+        )
+
+
 class ServerEventWaitTest(unittest.TestCase):
     def test_prints_delayed_guidance_once(self) -> None:
         server = mock.Mock()

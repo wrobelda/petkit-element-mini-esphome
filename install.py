@@ -65,6 +65,10 @@ class WifiDetectionUnavailable(RuntimeError):
     pass
 
 
+class InstallationTimeout(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class DeviceIdentity:
     mac_address: str
@@ -1077,7 +1081,7 @@ def main() -> None:
                         "server is reachable."
                     ),
                 ):
-                    raise RuntimeError(
+                    raise InstallationTimeout(
                         "the feeder did not contact the local compatibility "
                         "server within 180 seconds"
                     )
@@ -1091,7 +1095,7 @@ def main() -> None:
                 timeout=180,
                 progress_label="the Kickstart download",
             ):
-                raise RuntimeError(
+                raise InstallationTimeout(
                     "the feeder did not finish downloading Kickstart within "
                     "180 seconds"
                 )
@@ -1106,8 +1110,12 @@ def main() -> None:
                 expected_mac,
                 progress_label="the temporary Kickstart bridge",
             )
-        except BaseException:
-            if server is not None and server_log is not None:
+        except BaseException as error:
+            if (
+                not isinstance(error, InstallationTimeout)
+                and server is not None
+                and server_log is not None
+            ):
                 server_log.flush()
                 diagnostics = server_log_path.read_text(encoding="utf-8").strip()
                 if diagnostics:
@@ -1202,5 +1210,14 @@ def main() -> None:
     )
 
 
+def cli() -> int:
+    try:
+        main()
+    except InstallationTimeout as error:
+        print(f"\n⏱️  Installation timed out: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(cli())
