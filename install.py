@@ -721,23 +721,6 @@ def ensure_checkout(
     return path
 
 
-def configure_firewall() -> bool:
-    if shutil.which("firewall-cmd") is None:
-        return False
-    query = subprocess.run(
-        ["firewall-cmd", "--query-port=8080/tcp"], capture_output=True, check=False
-    )
-    if query.returncode == 0:
-        return False
-    answer = input("Temporarily allow TCP port 8080 through firewalld? [Y/n]: ").strip()
-    if answer.lower() not in {"", "y", "yes"}:
-        return False
-    subprocess.run(
-        ["sudo", "firewall-cmd", "--add-port=8080/tcp"], check=True
-    )
-    return True
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -897,7 +880,6 @@ def main() -> None:
         timezone_name = values["timezone"]
         offset = datetime.now().astimezone().utcoffset()
         timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
-        firewall_added = configure_firewall()
         server: subprocess.Popen[bytes] | None = None
         server_log = None
         server_log_path = project / "local-cache" / "compat-server.log"
@@ -998,12 +980,6 @@ def main() -> None:
                     server.kill()
             if server_log is not None:
                 server_log.close()
-            if firewall_added:
-                subprocess.run(
-                    ["sudo", "firewall-cmd", "--remove-port=8080/tcp"],
-                    check=False,
-                )
-
     assert detected is not None
     if detected.identity.project_name != KICKSTART_PROJECT:
         raise RuntimeError(

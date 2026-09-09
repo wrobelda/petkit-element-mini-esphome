@@ -832,9 +832,6 @@ class MainResumeTest(unittest.TestCase):
                 stack.enter_context(
                     mock.patch.object(install, "prompt", return_value="10.0.0.100")
                 )
-                stack.enter_context(
-                    mock.patch.object(install, "configure_firewall", return_value=False)
-                )
                 stack.enter_context(mock.patch.object(install.time, "sleep"))
                 stack.enter_context(
                     mock.patch("builtins.input", side_effect=input_answer)
