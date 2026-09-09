@@ -458,6 +458,69 @@ class WifiDetectionTest(unittest.TestCase):
         ):
             self.assertEqual(install.current_wifi_ssid(), "PETKIT_FEEDER_A")
 
+    def test_reads_active_macos_ssid(self) -> None:
+        ports = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout="Hardware Port: Wi-Fi\nDevice: en0\nEthernet Address: test\n",
+            stderr="",
+        )
+        current = subprocess.CompletedProcess(
+            [], 0, stdout="Current Wi-Fi Network: PETKIT_FEEDER_A\n", stderr=""
+        )
+        with (
+            mock.patch.object(
+                install.shutil,
+                "which",
+                side_effect=lambda name: (
+                    "/usr/sbin/networksetup" if name == "networksetup" else None
+                ),
+            ),
+            mock.patch.object(
+                install.subprocess, "run", side_effect=[ports, current]
+            ),
+        ):
+            self.assertEqual(install.current_wifi_ssid(), "PETKIT_FEEDER_A")
+
+    def test_lists_macos_ssids(self) -> None:
+        result = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=(
+                '{"SPAirPortDataType":[{"spairport_airport_interfaces":[{'
+                '"spairport_other_local_wireless_networks":['
+                '{"_name":"Home"},{"_name":"PETKIT_FEEDER_A"}]}]}]}'
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(
+                install.shutil,
+                "which",
+                side_effect=lambda name: (
+                    "/usr/sbin/system_profiler" if name == "system_profiler" else None
+                ),
+            ),
+            mock.patch.object(install.subprocess, "run", return_value=result),
+        ):
+            self.assertEqual(
+                install.available_wifi_ssids(), ["Home", "PETKIT_FEEDER_A"]
+            )
+
+    def test_failed_networkmanager_scan_is_unavailable(self) -> None:
+        result = subprocess.CompletedProcess([], 10, stdout="", stderr="failed")
+        with (
+            mock.patch.object(install.shutil, "which", return_value="/usr/bin/nmcli"),
+            mock.patch.object(install.subprocess, "run", return_value=result),
+        ):
+            with self.assertRaises(install.WifiDetectionUnavailable):
+                install.available_wifi_ssids()
+
+    def test_wifi_detection_requires_a_supported_platform_tool(self) -> None:
+        with mock.patch.object(install.shutil, "which", return_value=None):
+            with self.assertRaises(install.WifiDetectionUnavailable):
+                install.available_wifi_ssids()
+
     def test_waits_until_a_petkit_network_appears(self) -> None:
         with (
             mock.patch.object(
@@ -471,6 +534,42 @@ class WifiDetectionTest(unittest.TestCase):
                 install.wait_for_available_wifi_networks("PETKIT", timeout=5),
                 ["PETKIT_PURIFIER", "PETKIT_FEEDER_A"],
             )
+
+    def test_waits_for_the_selected_network_not_any_petkit_network(self) -> None:
+        with (
+            mock.patch.object(
+                install,
+                "current_wifi_ssid",
+                side_effect=["PETKIT_PURIFIER", "PETKIT_FEEDER_A"],
+            ),
+            mock.patch.object(install.time, "sleep"),
+        ):
+            self.assertEqual(
+                install.wait_for_wifi_network("PETKIT_FEEDER_A", timeout=5),
+                "PETKIT_FEEDER_A",
+            )
+
+    def test_chooses_one_of_multiple_petkit_networks(self) -> None:
+        with mock.patch.object(install, "prompt", return_value="2"):
+            self.assertEqual(
+                install.choose_wifi_network(
+                    ["PETKIT_PURIFIER", "PETKIT_FEEDER_A"]
+                ),
+                "PETKIT_FEEDER_A",
+            )
+
+    def test_falls_back_to_manual_confirmation_when_detection_is_unavailable(self) -> None:
+        with (
+            mock.patch.object(
+                install,
+                "wait_for_available_wifi_networks",
+                side_effect=install.WifiDetectionUnavailable("unsupported"),
+            ),
+            mock.patch("builtins.input", return_value="") as user_input,
+        ):
+            install.connect_to_petkit_setup_network()
+
+        user_input.assert_called_once()
 
 
 class OrchestrationResultTest(unittest.TestCase):

@@ -61,6 +61,10 @@ class DeviceMismatchError(RuntimeError):
     pass
 
 
+class WifiDetectionUnavailable(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class DeviceIdentity:
     mac_address: str
@@ -288,7 +292,7 @@ def current_wifi_ssid() -> str | None:
             text=True,
         )
         if result.returncode != 0:
-            return None
+            raise WifiDetectionUnavailable("NetworkManager could not read Wi-Fi state")
         for line in result.stdout.splitlines():
             if line.startswith("*:"):
                 return line[2:]
@@ -303,7 +307,7 @@ def current_wifi_ssid() -> str | None:
             text=True,
         )
         if ports.returncode != 0:
-            return None
+            raise WifiDetectionUnavailable("macOS could not list network interfaces")
         interface: str | None = None
         lines = ports.stdout.splitlines()
         for index, line in enumerate(lines):
@@ -314,7 +318,7 @@ def current_wifi_ssid() -> str | None:
                         break
                 break
         if interface is None:
-            return None
+            raise WifiDetectionUnavailable("macOS did not report a Wi-Fi interface")
         current = subprocess.run(
             [networksetup, "-getairportnetwork", interface],
             check=False,
@@ -326,7 +330,7 @@ def current_wifi_ssid() -> str | None:
             return current.stdout.removeprefix(prefix).strip()
         return None
 
-    raise RuntimeError(
+    raise WifiDetectionUnavailable(
         "automatic Wi-Fi detection requires nmcli on Linux or networksetup on macOS"
     )
 
@@ -353,7 +357,7 @@ def available_wifi_ssids() -> list[str]:
             text=True,
         )
         if result.returncode != 0:
-            return []
+            raise WifiDetectionUnavailable("NetworkManager could not scan for Wi-Fi networks")
         return sorted({line for line in result.stdout.splitlines() if line})
 
     system_profiler = shutil.which("system_profiler")
@@ -365,11 +369,11 @@ def available_wifi_ssids() -> list[str]:
             text=True,
         )
         if result.returncode != 0:
-            return []
+            raise WifiDetectionUnavailable("macOS could not scan for Wi-Fi networks")
         try:
             report = json.loads(result.stdout)
         except json.JSONDecodeError:
-            return []
+            raise WifiDetectionUnavailable("macOS returned an invalid Wi-Fi scan")
         networks: set[str] = set()
 
         def collect(value: object, *, network_list: bool = False) -> None:
@@ -392,9 +396,14 @@ def available_wifi_ssids() -> list[str]:
                     collect(child, network_list=network_list)
 
         collect(report)
+        if not networks:
+            raise WifiDetectionUnavailable(
+                "macOS did not expose Wi-Fi network names; Location Services "
+                "permission may be required"
+            )
         return sorted(networks)
 
-    raise RuntimeError(
+    raise WifiDetectionUnavailable(
         "automatic Wi-Fi scanning requires nmcli on Linux or system_profiler "
         "on macOS"
     )
@@ -407,22 +416,59 @@ def wait_for_available_wifi_networks(prefix: str, *, timeout: int = 180) -> list
         if matches:
             return matches
         time.sleep(2)
-    raise RuntimeError(
+    raise TimeoutError(
         f"no Wi-Fi network beginning with {prefix!r} appeared within {timeout} seconds"
     )
 
 
-def wait_for_wifi_network(prefix: str, *, timeout: int = 180) -> str:
+def wait_for_wifi_network(expected_ssid: str, *, timeout: int = 180) -> str:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         ssid = current_wifi_ssid()
-        if ssid is not None and ssid.startswith(prefix):
+        if ssid == expected_ssid:
             return ssid
         time.sleep(1)
-    raise RuntimeError(
-        f"a Wi-Fi network beginning with {prefix!r} was not connected within "
-        f"{timeout} seconds"
+    raise TimeoutError(
+        f"Wi-Fi network {expected_ssid!r} was not connected within {timeout} seconds"
     )
+
+
+def choose_wifi_network(ssids: list[str]) -> str:
+    if len(ssids) == 1:
+        return ssids[0]
+    while True:
+        choice = prompt("Petkit setup network (name or number)")
+        if choice.isdigit() and 1 <= int(choice) <= len(ssids):
+            return ssids[int(choice) - 1]
+        if choice in ssids:
+            return choice
+        print("Choose one of the listed Petkit setup networks.")
+
+
+def connect_to_petkit_setup_network(*, debug: bool = False) -> None:
+    try:
+        softaps = wait_for_available_wifi_networks(PETKIT_SOFTAP_PREFIX)
+        print("\nAvailable Petkit setup networks:")
+        for number, ssid in enumerate(softaps, start=1):
+            print(f"{number}. {ssid}")
+        if len(softaps) > 1:
+            print(
+                "The feeder network is normally named like PETKIT_FEEDER_xyz."
+            )
+        selected_softap = choose_wifi_network(softaps)
+        print(
+            f"Connect this computer to {selected_softap!r}. The installer "
+            "will continue automatically."
+        )
+        softap_ssid = wait_for_wifi_network(selected_softap)
+        print(f"Connected to {softap_ssid!r}.")
+    except (WifiDetectionUnavailable, TimeoutError) as error:
+        if debug:
+            print(f"Automatic Wi-Fi detection unavailable: {error}")
+        input(
+            "\nConnect this computer to the feeder's setup Wi-Fi network, "
+            "normally named like PETKIT_FEEDER_xyz, then press Enter.\n"
+        )
 
 
 def read_device_identity(
@@ -860,21 +906,7 @@ def main() -> None:
                 "\nPut the feeder in setup mode. After the confirmation beep, "
                 "press Enter.\n"
             )
-            softaps = wait_for_available_wifi_networks(PETKIT_SOFTAP_PREFIX)
-            print("\nAvailable Petkit setup networks:")
-            for ssid in softaps:
-                print(f"- {ssid}")
-            if len(softaps) > 1:
-                print(
-                    "The feeder network is normally named like "
-                    "PETKIT_FEEDER_xyz."
-                )
-            print(
-                "Connect this computer to the correct PETKIT_FEEDER_xyz Wi-Fi "
-                "network. The installer will continue automatically."
-            )
-            softap_ssid = wait_for_wifi_network(PETKIT_SOFTAP_PREFIX)
-            print(f"Connected to {softap_ssid!r}.")
+            connect_to_petkit_setup_network(debug=args.debug)
             popen_output: dict[str, object] = {}
             if not args.debug:
                 descriptor = os.open(
