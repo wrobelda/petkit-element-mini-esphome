@@ -39,10 +39,10 @@ The guided installer handles the complete migration:
    is running on the same physical device.
 
 The installer pauses when you need to put the feeder in setup mode or reconnect
-the computer to your normal Wi-Fi network. If the process is interrupted after
-Kickstart or the final firmware boots, run the same command again. The installer
-identifies the running firmware and continues from that phase without repeating
-stock provisioning or a completed migration.
+the computer to your regular 2.4 GHz Wi-Fi network. If the process is interrupted
+after Kickstart or the final firmware boots, run the same command again. The
+installer identifies the running firmware and continues from that phase without
+repeating stock provisioning or a completed migration.
 
 ```sh
 git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
@@ -87,7 +87,7 @@ migration.
 
 Edit `esphome/secrets.yaml` and set:
 
-- the target 2.4 GHz Wi-Fi network name and password;
+- the regular 2.4 GHz Wi-Fi network name and password;
 - the feeder's IANA time-zone name;
 - a unique fallback-AP password and Kickstart web login;
 - an API encryption key generated with `openssl rand -base64 32`.
@@ -137,13 +137,14 @@ firewall.
 #### 4. Provision the stock feeder
 
 Open another terminal in the `petkit-compat-server` checkout. Record the
-computer's address on the target Wi-Fi network. Set the network name once, then
-load its saved password without placing the password itself in shell history.
+computer's address on the regular 2.4 GHz Wi-Fi network. Set the network name
+once, then load its saved password without placing the password itself in shell
+history.
 
 On Linux with NetworkManager:
 
 ```bash
-export ESPHOME_WIFI_SSID='<target Wi-Fi name>'
+export ESPHOME_WIFI_SSID='<regular 2.4 GHz Wi-Fi name>'
 export ESPHOME_WIFI_PASSWORD="$(nmcli --show-secrets \
   --get-values 802-11-wireless-security.psk \
   connection show "$ESPHOME_WIFI_SSID")"
@@ -152,7 +153,7 @@ export ESPHOME_WIFI_PASSWORD="$(nmcli --show-secrets \
 On macOS:
 
 ```sh
-export ESPHOME_WIFI_SSID='<target Wi-Fi name>'
+export ESPHOME_WIFI_SSID='<regular 2.4 GHz Wi-Fi name>'
 export ESPHOME_WIFI_PASSWORD="$(security find-generic-password \
   -D 'AirPort network password' -a "$ESPHOME_WIFI_SSID" -gw)"
 ```
@@ -172,10 +173,11 @@ python3 provision_petkit_device.py \
 unset ESPHOME_WIFI_PASSWORD
 ```
 
-Reconnect the computer to the target Wi-Fi network. The server terminal should
-show the feeder's startup requests, OTA download, and successful completion.
-The transition image relocates itself to the safe upper slot automatically
-when Petkit's stock ESP8266 OTA client initially installs it in the lower slot.
+Reconnect the computer to the regular 2.4 GHz Wi-Fi network. The server terminal
+should show the feeder's startup requests, OTA download, and successful
+completion. The transition image relocates itself to the safe upper slot
+automatically when Petkit's stock ESP8266 OTA client initially installs it in
+the lower slot.
 
 #### 5. Preserve recovery data and install the final image
 

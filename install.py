@@ -159,7 +159,7 @@ def read_yaml_secrets(path: Path, python: Path) -> dict[str, str]:
 
 def write_secrets(path: Path) -> dict[str, str]:
     values = {
-        "wifi_ssid": prompt("2.4 GHz Wi-Fi network name"),
+        "wifi_ssid": prompt("Regular 2.4 GHz Wi-Fi network name"),
         "wifi_password": prompt("Wi-Fi password", secret=True),
         "timezone": prompt("IANA time zone", detect_timezone()),
         "fallback_ap_password": prompt(
@@ -573,7 +573,8 @@ def main() -> None:
 
     if detected is None:
         computer_ip = prompt(
-            "This computer's address on the target Wi-Fi", detect_local_ip()
+            "This computer's IP address on the regular 2.4 GHz Wi-Fi network",
+            detect_local_ip(),
         )
         timezone_name = values["timezone"]
         offset = datetime.now().astimezone().utcoffset()
@@ -631,9 +632,9 @@ def main() -> None:
                     "target network."
                 )
             input(
-                "\nReconnect this computer to the target Wi-Fi network, then press "
-                "Enter. Keep this installer running while the feeder downloads and "
-                "boots Kickstart."
+                "\nReconnect this computer to the regular 2.4 GHz Wi-Fi network, "
+                "then press Enter. Keep this installer running while the feeder "
+                "downloads and boots Kickstart."
             )
             detected = wait_for_firmware(
                 python,
