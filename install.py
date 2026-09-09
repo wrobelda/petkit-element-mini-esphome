@@ -216,15 +216,15 @@ def read_yaml_secrets(path: Path, python: Path) -> dict[str, str]:
 
 def write_secrets(path: Path) -> dict[str, str]:
     values = {
-        "wifi_ssid": prompt("Regular 2.4 GHz Wi-Fi network name"),
-        "wifi_password": prompt("Wi-Fi password", secret=True),
-        "timezone": prompt("IANA time zone", detect_timezone()),
+        "wifi_ssid": prompt("    Regular 2.4 GHz Wi-Fi network name"),
+        "wifi_password": prompt("    Wi-Fi password", secret=True),
+        "timezone": prompt("    IANA time zone", detect_timezone()),
         "fallback_ap_password": prompt(
-            "Fallback access-point password", secrets.token_urlsafe(12)
+            "    Fallback access-point password", secrets.token_urlsafe(12)
         ),
-        "kickstart_web_username": prompt("Kickstart web username", "admin"),
+        "kickstart_web_username": prompt("    Kickstart web username", "admin"),
         "kickstart_web_password": prompt(
-            "Kickstart web password", secrets.token_urlsafe(16)
+            "    Kickstart web password", secrets.token_urlsafe(16)
         ),
         "api_key": base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
     }
@@ -243,11 +243,11 @@ def load_or_create_secrets(path: Path, python: Path) -> dict[str, str]:
         path.chmod(0o600)
         if values.get("wifi_ssid"):
             print(
-                f"Using existing {path} for regular 2.4 GHz Wi-Fi network "
+                f"  ✓ Using existing {path} for regular 2.4 GHz Wi-Fi network "
                 f"{values['wifi_ssid']!r}"
             )
         else:
-            print(f"Using existing {path}")
+            print(f"  ✓ Using existing {path}")
         return values
     return write_secrets(path)
 
@@ -437,37 +437,38 @@ def choose_wifi_network(ssids: list[str]) -> str:
     if len(ssids) == 1:
         return ssids[0]
     while True:
-        choice = prompt("Petkit setup network (name or number)")
+        choice = prompt("    Petkit setup network (name or number)")
         if choice.isdigit() and 1 <= int(choice) <= len(ssids):
             return ssids[int(choice) - 1]
         if choice in ssids:
             return choice
-        print("Choose one of the listed Petkit setup networks.")
+        print("  Choose one of the listed Petkit setup networks.")
 
 
 def connect_to_petkit_setup_network(*, debug: bool = False) -> None:
     try:
         softaps = wait_for_available_wifi_networks(PETKIT_SOFTAP_PREFIX)
-        print("\nAvailable Petkit setup networks:")
+        print("\n  Available Petkit setup networks:")
         for number, ssid in enumerate(softaps, start=1):
-            print(f"{number}. {ssid}")
+            print(f"    {number}. {ssid}")
         if len(softaps) > 1:
             print(
-                "The feeder network is normally named like PETKIT_FEEDER_xyz."
+                "  The feeder network is normally named like PETKIT_FEEDER_xyz."
             )
         selected_softap = choose_wifi_network(softaps)
         print(
-            f"Connect this computer to {selected_softap!r}. The installer "
+            f"  → Connect this computer to {selected_softap!r}. The installer "
             "will continue automatically."
         )
         softap_ssid = wait_for_wifi_network(selected_softap)
-        print(f"Connected to {softap_ssid!r}.")
+        print(f"  ✓ Connected to {softap_ssid!r}.")
     except (WifiDetectionUnavailable, TimeoutError) as error:
         if debug:
-            print(f"Automatic Wi-Fi detection unavailable: {error}")
+            print(f"  Automatic Wi-Fi detection unavailable: {error}")
         input(
-            "\nConnect this computer to the feeder's setup Wi-Fi network, "
-            "normally named like PETKIT_FEEDER_xyz, then press Enter.\n"
+            "\n  → Connect this computer to the feeder's setup Wi-Fi network, "
+            "normally named like PETKIT_FEEDER_xyz.\n"
+            "    Press Enter when connected.\n"
         )
 
 
@@ -602,7 +603,7 @@ def wait_for_firmware(
                 return detected
         now = time.monotonic()
         if progress_label is not None and now >= next_progress:
-            print(f"Still waiting for {progress_label}...")
+            print(f"  … Still waiting for {progress_label}...")
             next_progress = now + 10
         time.sleep(2)
     if last_project is not None:
@@ -697,7 +698,7 @@ def wait_for_server_event(
             return True
         now = time.monotonic()
         if progress_label is not None and now >= next_progress:
-            print(f"Still waiting for {progress_label}...")
+            print(f"  … Still waiting for {progress_label}...")
             next_progress = now + 10
         if delayed_message is not None and now >= message_at:
             print(f"\n{delayed_message}")
@@ -800,12 +801,14 @@ def main() -> None:
     project = Path(__file__).resolve().parent
     parent = project.parent
     print(
-        "Installation takes place in two phases:\n"
-        "1. Install Kickstart, a temporary bridge that can start from Petkit's "
+        "🚀 Petkit Fresh Element Mini ESPHome installer\n\n"
+        "The installation has two phases:\n"
+        "  1. Install Kickstart, a temporary bridge that can start from Petkit's "
         "stock firmware layout.\n"
-        "2. Use Kickstart to install the final ESPHome feeder firmware.\n"
+        "  2. Use Kickstart to install the final ESPHome feeder firmware.\n"
     )
-    print("Preparing supporting projects...")
+    print("📦 Preparing installation")
+    print("  • Checking supporting projects...")
     compat = ensure_checkout(
         parent,
         "petkit-compat-server",
@@ -825,7 +828,7 @@ def main() -> None:
 
     venv = project / ".venv"
     if not venv.exists():
-        print("Creating the Python build environment...")
+        print("  • Creating the Python build environment...")
         run(
             [sys.executable, "-m", "venv", str(venv)],
             cwd=project,
@@ -833,13 +836,14 @@ def main() -> None:
         )
     python = venv / "bin" / "python"
     esphome = venv / "bin" / "esphome"
-    print("Preparing ESPHome build dependencies...")
+    print("  • Preparing ESPHome build dependencies...")
     run(
         [str(python), "-m", "pip", "install", "esphome==2026.9.0b1"],
         cwd=project,
         debug=args.debug,
     )
 
+    print("  • Loading installation settings...")
     secrets_path = project / "esphome" / "secrets.yaml"
     values = load_or_create_secrets(secrets_path, python)
     required = {
@@ -865,14 +869,14 @@ def main() -> None:
 
     build_env = os.environ.copy()
     build_env["KICKSTART_COMPONENTS_PATH"] = str((kickstart / "components").resolve())
-    print("Building the Kickstart transition firmware...")
+    print("  • Building the Kickstart transition firmware...")
     run(
         [str(esphome), "compile", "petkit-kickstart.yaml"],
         cwd=project / "esphome",
         env=build_env,
         debug=args.debug,
     )
-    print("Building the final feeder firmware...")
+    print("  • Building the final feeder firmware...")
     run(
         [str(esphome), "compile", "petkit-feeder.yaml"],
         cwd=project / "esphome",
@@ -893,7 +897,7 @@ def main() -> None:
     )
     require_build_artifact(transition_elf, "Kickstart ELF")
     require_build_artifact(factory, "final ESPHome factory image")
-    print("Packaging the stock-compatible Kickstart image...")
+    print("  • Packaging the stock-compatible Kickstart image...")
     run(
         [
             str(python),
@@ -919,7 +923,7 @@ def main() -> None:
 
     state_path = project / INSTALL_STATE
     expected_mac = load_expected_mac(state_path)
-    print("Checking for an existing Kickstart or final ESPHome installation...")
+    print("  • Checking for an existing Kickstart or final ESPHome installation...")
     detected = detect_running_firmware(
         python,
         project,
@@ -930,15 +934,16 @@ def main() -> None:
     if detected is not None and detected.identity.project_name == FINAL_PROJECT:
         save_expected_mac(state_path, detected.identity.mac_address)
         print(
-            f"Final ESPHome firmware is already running at {detected.host} "
+            f"  ✓ Final ESPHome firmware is already running at {detected.host} "
             f"on feeder {detected.identity.mac_address}."
         )
         return
 
     if detected is None:
-        print("\n🔹 Phase 1 of 2: install the temporary Kickstart bridge.")
+        print("\n🔹 Phase 1 of 2 — Install the temporary Kickstart bridge")
+        print("  • Confirm how the feeder can reach this computer.")
         computer_ip = prompt(
-            "This computer's IP address on the regular 2.4 GHz Wi-Fi network",
+            "    Computer IP address on the regular 2.4 GHz Wi-Fi network",
             detect_local_ip(),
         )
         timezone_name = values["timezone"]
@@ -967,7 +972,7 @@ def main() -> None:
                     "stdout": server_log,
                     "stderr": subprocess.STDOUT,
                 }
-            print("Starting the local compatibility server...")
+            print("  • Starting the local compatibility server...")
             server = subprocess.Popen(
                 [
                     str(python),
@@ -991,7 +996,7 @@ def main() -> None:
             if server.poll() is not None:
                 raise RuntimeError("the local Petkit API server did not start")
             print(
-                "Checking whether the stock feeder already contacts this "
+                "  • Checking whether the stock feeder already contacts this "
                 "computer..."
             )
             already_provisioned = wait_for_server_event(
@@ -1005,18 +1010,18 @@ def main() -> None:
             )
             if already_provisioned:
                 print(
-                    "The feeder was already set up to use this computer as a "
+                    "  ✓ The feeder was already set up to use this computer as a "
                     "server; skipping Wi-Fi setup."
                 )
             else:
                 input(
-                    "\nPut the feeder in setup mode. After the confirmation beep, "
-                    "press Enter.\n"
+                    "\n  → Put the feeder in setup mode.\n"
+                    "    Press Enter after the confirmation beep.\n"
                 )
                 connect_to_petkit_setup_network(debug=args.debug)
                 provision_env = os.environ.copy()
                 provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
-                print("Sending the Wi-Fi and local-server settings to the feeder...")
+                print("  • Sending Wi-Fi and local-server settings to the feeder...")
                 acknowledged = run_provisioner(
                     [
                         str(python),
@@ -1039,18 +1044,18 @@ def main() -> None:
                 )
                 if not acknowledged:
                     print(
-                        "The settings were sent, but the SoftAP connection ended "
+                        "  The settings were sent, but the SoftAP connection ended "
                         "before acknowledgement. The installer will verify the "
                         "result on the regular 2.4 GHz Wi-Fi network."
                     )
                 input(
-                    "\nReconnect this computer to the regular 2.4 GHz Wi-Fi "
-                    "network, then press Enter.\n"
+                    "\n  → Reconnect this computer to the regular 2.4 GHz Wi-Fi "
+                    "network.\n    Press Enter when connected.\n"
                 )
             if already_provisioned:
-                print("✓ The feeder contacted this computer.")
+                print("  ✓ The feeder contacted this computer.")
             else:
-                print("Waiting for the feeder to contact this computer...")
+                print("  • Waiting for the feeder to contact this computer...")
                 if not wait_for_server_event(
                     server_event_log_path,
                     server,
@@ -1062,12 +1067,12 @@ def main() -> None:
                     timeout=180,
                     progress_label="the feeder to contact this computer",
                     delayed_message=(
-                        "No connection has arrived yet. TCP port 8080 on "
+                        "  ⚠️  No connection has arrived yet. TCP port 8080 on "
                         f"{computer_ip} must be reachable from the regular "
-                        "Wi-Fi network. On another device connected to that "
+                        "Wi-Fi network.\n     On another device connected to that "
                         "network, open this address in a web browser:\n\n"
-                        f"  http://{computer_ip}:8080/\n\n"
-                        "A response showing status 'ready' proves that the "
+                        f"       http://{computer_ip}:8080/\n\n"
+                        "     A response showing status 'ready' proves that the "
                         "server is reachable."
                     ),
                 ):
@@ -1075,8 +1080,8 @@ def main() -> None:
                         "the feeder did not contact the local compatibility "
                         "server within 180 seconds"
                     )
-                print("✓ The feeder contacted this computer.")
-            print("Waiting for the feeder to download Kickstart...")
+                print("  ✓ The feeder contacted this computer.")
+            print("  • Waiting for the feeder to download Kickstart...")
             if not wait_for_server_event(
                 server_event_log_path,
                 server,
@@ -1089,8 +1094,8 @@ def main() -> None:
                     "the feeder did not finish downloading Kickstart within "
                     "180 seconds"
                 )
-            print("✓ Kickstart download completed.")
-            print("Waiting for the temporary Kickstart bridge to boot...")
+            print("  ✓ Kickstart download completed.")
+            print("  • Waiting for the temporary Kickstart bridge to boot...")
             detected = wait_for_firmware(
                 python,
                 project,
@@ -1125,13 +1130,13 @@ def main() -> None:
     save_expected_mac(state_path, detected.identity.mac_address)
     kickstart_host = detected.host
     print(
-        f"Kickstart is authenticated at {kickstart_host} on feeder "
+        f"  ✓ Kickstart is authenticated at {kickstart_host} on feeder "
         f"{detected.identity.mac_address}."
     )
 
-    print("\n🔹 Phase 2 of 2: install the final ESPHome feeder firmware.")
+    print("\n🔹 Phase 2 of 2 — Install the final ESPHome feeder firmware")
     recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
-    print("Saving the 2 MiB recovery image...")
+    print("  • Saving the 2 MiB recovery image...")
     download_recovery(
         recovery,
         url=f"http://{kickstart_host}/hub/flash_read",
@@ -1144,7 +1149,7 @@ def main() -> None:
         raise RuntimeError("Kickstart recovery download is not 2 MiB")
 
     migration_error: subprocess.CalledProcessError | None = None
-    print("Installing the final feeder firmware...")
+    print("  • Installing the final feeder firmware...")
     try:
         run_authenticated_curl(
             [
@@ -1162,11 +1167,11 @@ def main() -> None:
             raise
         migration_error = error
         print(
-            "The migration response was lost or rejected. The installer will "
+            "  The migration response was lost or rejected. The installer will "
             "identify the firmware now running before deciding the outcome."
         )
 
-    print("\nWaiting for the authenticated final ESPHome firmware.")
+    print("  • Waiting for the authenticated final ESPHome firmware...")
     try:
         final = wait_for_firmware(
             python,
