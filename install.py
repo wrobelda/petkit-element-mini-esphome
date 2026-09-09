@@ -634,7 +634,7 @@ def main() -> None:
             input(
                 "\nReconnect this computer to the regular 2.4 GHz Wi-Fi network, "
                 "then press Enter. Keep this installer running while the feeder "
-                "downloads and boots Kickstart."
+                "downloads and boots Kickstart.\n"
             )
             detected = wait_for_firmware(
                 python,
