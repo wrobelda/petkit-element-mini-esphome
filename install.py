@@ -655,6 +655,34 @@ def require_build_artifact(path: Path, description: str) -> None:
         raise RuntimeError(f"{description} was not created at {path}")
 
 
+def server_received_device_request(path: Path) -> bool:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return False
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("event") == "request":
+            return True
+    return False
+
+
+def wait_for_server_request(
+    path: Path, server: subprocess.Popen[bytes], *, timeout: int = 10
+) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if server.poll() is not None:
+            raise RuntimeError("the local Petkit API server stopped")
+        if server_received_device_request(path):
+            return True
+        time.sleep(1)
+    return False
+
+
 def github_repository(url: str) -> str | None:
     if url.startswith("git@github.com:"):
         path = url.removeprefix("git@github.com:")
@@ -897,11 +925,6 @@ def main() -> None:
         server_log = None
         server_log_path = project / "local-cache" / "compat-server.log"
         try:
-            input(
-                "\nPut the feeder in setup mode. After the confirmation beep, "
-                "press Enter.\n"
-            )
-            connect_to_petkit_setup_network(debug=args.debug)
             popen_output: dict[str, object] = {}
             if not args.debug:
                 descriptor = os.open(
@@ -935,39 +958,57 @@ def main() -> None:
             time.sleep(1)
             if server.poll() is not None:
                 raise RuntimeError("the local Petkit API server did not start")
-            provision_env = os.environ.copy()
-            provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
-            print("Sending the Wi-Fi and local-server settings to the feeder...")
-            acknowledged = run_provisioner(
-                [
-                    str(python),
-                    "provision_petkit_device.py",
-                    "--profile",
-                    str(PROFILE),
-                    "--ssid",
-                    values["wifi_ssid"],
-                    "--server",
-                    f"http://{computer_ip}:8080/6/",
-                    "--timezone",
-                    timezone_offset,
-                    "--locale",
-                    timezone_name,
-                    "--send",
-                ],
-                cwd=compat,
-                env=provision_env,
-                debug=args.debug,
+            print(
+                "Checking whether the stock feeder already contacts this "
+                "computer..."
             )
-            if not acknowledged:
+            already_provisioned = not args.debug and wait_for_server_request(
+                server_log_path, server
+            )
+            if already_provisioned:
                 print(
-                    "The commit was sent, but the SoftAP connection ended before "
-                    "acknowledgement. The installer will verify the result on the "
-                    "regular 2.4 GHz Wi-Fi network."
+                    "The feeder was already set up to use this computer as a "
+                    "server; skipping Wi-Fi setup."
                 )
-            input(
-                "\nReconnect this computer to the regular 2.4 GHz Wi-Fi network, "
-                "then press Enter.\n"
-            )
+            else:
+                input(
+                    "\nPut the feeder in setup mode. After the confirmation beep, "
+                    "press Enter.\n"
+                )
+                connect_to_petkit_setup_network(debug=args.debug)
+                provision_env = os.environ.copy()
+                provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
+                print("Sending the Wi-Fi and local-server settings to the feeder...")
+                acknowledged = run_provisioner(
+                    [
+                        str(python),
+                        "provision_petkit_device.py",
+                        "--profile",
+                        str(PROFILE),
+                        "--ssid",
+                        values["wifi_ssid"],
+                        "--server",
+                        f"http://{computer_ip}:8080/6/",
+                        "--timezone",
+                        timezone_offset,
+                        "--locale",
+                        timezone_name,
+                        "--send",
+                    ],
+                    cwd=compat,
+                    env=provision_env,
+                    debug=args.debug,
+                )
+                if not acknowledged:
+                    print(
+                        "The settings were sent, but the SoftAP connection ended "
+                        "before acknowledgement. The installer will verify the "
+                        "result on the regular 2.4 GHz Wi-Fi network."
+                    )
+                input(
+                    "\nReconnect this computer to the regular 2.4 GHz Wi-Fi "
+                    "network, then press Enter.\n"
+                )
             print(
                 "Waiting for the feeder to contact this computer, download "
                 "Kickstart, and boot the temporary bridge..."

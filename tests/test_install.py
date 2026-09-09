@@ -317,6 +317,27 @@ class BuildArtifactTest(unittest.TestCase):
                 install.require_build_artifact(path, "test image")
 
 
+class ServerRequestTest(unittest.TestCase):
+    def test_recognizes_request_event_among_server_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "server.log"
+            path.write_text(
+                '{"event":"ota_offer"}\n'
+                "listening on 0.0.0.0:8080\n"
+                '{"event":"request","path":"/6/device/dev_ota_check"}\n',
+                encoding="utf-8",
+            )
+
+            self.assertTrue(install.server_received_device_request(path))
+
+    def test_absent_request_is_not_prior_provisioning(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "server.log"
+            path.write_text('{"event":"ota_offer"}\n', encoding="utf-8")
+
+            self.assertFalse(install.server_received_device_request(path))
+
+
 class DeviceIdentityTest(unittest.TestCase):
     def test_reads_authenticated_project_identity(self) -> None:
         result = subprocess.CompletedProcess(
@@ -738,7 +759,7 @@ class MainResumeTest(unittest.TestCase):
             upload.assert_called_once()
             self.assertEqual(wait.call_args.args[4], install.FINAL_PROJECT)
 
-    def test_server_starts_after_softap_connection(self) -> None:
+    def test_server_starts_before_softap_connection(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory) / "petkit-element-mini-esphome"
             (project / "esphome").mkdir(parents=True)
@@ -833,6 +854,11 @@ class MainResumeTest(unittest.TestCase):
                 stack.enter_context(
                     mock.patch.object(install, "prompt", return_value="10.0.0.100")
                 )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "wait_for_server_request", return_value=False
+                    )
+                )
                 stack.enter_context(mock.patch.object(install.time, "sleep"))
                 stack.enter_context(
                     mock.patch("builtins.input", side_effect=input_answer)
@@ -842,9 +868,9 @@ class MainResumeTest(unittest.TestCase):
             self.assertEqual(
                 events,
                 [
+                    "server-started",
                     "setup-confirmed",
                     "softap-connected",
-                    "server-started",
                     "provisioned",
                     "regular-wifi-reconnected",
                 ],
@@ -853,6 +879,69 @@ class MainResumeTest(unittest.TestCase):
             self.assertIn("stdout", popen_kwargs)
             self.assertEqual(popen_kwargs["stderr"], subprocess.STDOUT)
             self.assertIn("-u", popen.call_args.args[0])
+
+    def test_existing_stock_server_configuration_skips_softap(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "petkit-element-mini-esphome"
+            (project / "esphome").mkdir(parents=True)
+            kickstart = install.DetectedFirmware(
+                "petkit-kickstart.local", self.identity(install.KICKSTART_PROJECT)
+            )
+            final = install.DetectedFirmware(
+                "petkit-feeder.local", self.identity(install.FINAL_PROJECT)
+            )
+            server = mock.MagicMock()
+            server.poll.return_value = None
+
+            def download(path: Path, **_kwargs: object) -> None:
+                path.write_bytes(b"R" * 0x200000)
+
+            patches = self.common_patches(project)
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "detect_running_firmware", return_value=None
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install,
+                        "wait_for_firmware",
+                        side_effect=[kickstart, final],
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "download_recovery", side_effect=download
+                    )
+                )
+                stack.enter_context(mock.patch.object(install, "run_authenticated_curl"))
+                stack.enter_context(
+                    mock.patch.object(install.subprocess, "Popen", return_value=server)
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "wait_for_server_request", return_value=True
+                    )
+                )
+                provision = stack.enter_context(
+                    mock.patch.object(install, "run_provisioner")
+                )
+                connect = stack.enter_context(
+                    mock.patch.object(install, "connect_to_petkit_setup_network")
+                )
+                user_input = stack.enter_context(mock.patch("builtins.input"))
+                stack.enter_context(
+                    mock.patch.object(install, "prompt", return_value="10.0.0.100")
+                )
+                stack.enter_context(mock.patch.object(install.time, "sleep"))
+                install.main()
+
+            provision.assert_not_called()
+            connect.assert_not_called()
+            user_input.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()
