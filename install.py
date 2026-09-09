@@ -25,7 +25,7 @@ REPOSITORIES = {
     "esphome-kickstart": "https://github.com/wrobelda/esphome-kickstart.git",
 }
 REPOSITORY_REVISIONS = {
-    "petkit-compat-server": "a15294d796930dc9f681c9611f48f30e5bd96c25",
+    "petkit-compat-server": "06b4fba2d270541a74374ff9c573ccb1f468a972",
     "esphome-kickstart": "2edf44146b259712228b01146ca3880e04cf89b7",
 }
 ALLOWED_REPOSITORY_ORIGINS = {
@@ -986,7 +986,13 @@ def main() -> None:
                 "computer..."
             )
             already_provisioned = not args.debug and wait_for_server_event(
-                server_log_path, server, "request"
+                server_log_path,
+                server,
+                "request",
+                required_fields={
+                    "method": "POST",
+                    "path": "/6/feedermini/dev_ota_check",
+                },
             )
             if already_provisioned:
                 print(
@@ -1041,6 +1047,10 @@ def main() -> None:
                         server_log_path,
                         server,
                         "request",
+                        required_fields={
+                            "method": "POST",
+                            "path": "/6/feedermini/dev_ota_check",
+                        },
                         timeout=180,
                         progress_label="the feeder to contact this computer",
                         delayed_message=(

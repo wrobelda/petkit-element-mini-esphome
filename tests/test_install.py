@@ -318,17 +318,31 @@ class BuildArtifactTest(unittest.TestCase):
 
 
 class ServerRequestTest(unittest.TestCase):
-    def test_recognizes_request_event_among_server_diagnostics(self) -> None:
+    def test_recognizes_stock_device_request_but_not_readiness_check(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "server.log"
             path.write_text(
                 '{"event":"ota_offer"}\n'
                 "listening on 0.0.0.0:8080\n"
-                '{"event":"request","path":"/6/device/dev_ota_check"}\n',
+                '{"event":"readiness_check","path":"/"}\n'
+                '{"event":"request","method":"POST",'
+                '"path":"/6/feedermini/dev_ota_check"}\n',
                 encoding="utf-8",
             )
 
-            self.assertTrue(install.server_log_has_event(path, "request"))
+            self.assertFalse(
+                install.server_log_has_event(path, "request", {"method": "GET"})
+            )
+            self.assertTrue(
+                install.server_log_has_event(
+                    path,
+                    "request",
+                    {
+                        "method": "POST",
+                        "path": "/6/feedermini/dev_ota_check",
+                    },
+                )
+            )
 
     def test_absent_request_is_not_prior_provisioning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -966,7 +980,7 @@ class MainResumeTest(unittest.TestCase):
                 stack.enter_context(
                     mock.patch.object(install.subprocess, "Popen", return_value=server)
                 )
-                stack.enter_context(
+                wait = stack.enter_context(
                     mock.patch.object(
                         install,
                         "wait_for_server_event",
@@ -989,6 +1003,14 @@ class MainResumeTest(unittest.TestCase):
             provision.assert_not_called()
             connect.assert_not_called()
             user_input.assert_not_called()
+            self.assertEqual(wait.call_count, 2)
+            self.assertEqual(
+                wait.call_args_list[0].kwargs["required_fields"],
+                {
+                    "method": "POST",
+                    "path": "/6/feedermini/dev_ota_check",
+                },
+            )
 
 if __name__ == "__main__":
     unittest.main()
