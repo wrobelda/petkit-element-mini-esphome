@@ -1042,11 +1042,12 @@ def main() -> None:
                     env=provision_env,
                     debug=args.debug,
                 )
+                print("  ✓ Wi-Fi and local-server settings sent.")
                 if not acknowledged:
                     print(
-                        "  The settings were sent, but the SoftAP connection ended "
-                        "before acknowledgement. The installer will verify the "
-                        "result on the regular 2.4 GHz Wi-Fi network."
+                        "    The SoftAP connection ended before acknowledgement. "
+                        "The installer will verify the result on the regular "
+                        "2.4 GHz Wi-Fi network."
                     )
                 input(
                     "\n  → Reconnect this computer to the regular 2.4 GHz Wi-Fi "

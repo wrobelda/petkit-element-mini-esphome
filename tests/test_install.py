@@ -919,6 +919,7 @@ class MainResumeTest(unittest.TestCase):
                     )
                 )
                 stack.enter_context(mock.patch.object(install.time, "sleep"))
+                output = stack.enter_context(mock.patch("builtins.print"))
                 stack.enter_context(
                     mock.patch("builtins.input", side_effect=input_answer)
                 )
@@ -938,6 +939,10 @@ class MainResumeTest(unittest.TestCase):
             self.assertIn("stdout", popen_kwargs)
             self.assertEqual(popen_kwargs["stderr"], subprocess.STDOUT)
             self.assertIn("-u", popen.call_args.args[0])
+            self.assertIn(
+                "  ✓ Wi-Fi and local-server settings sent.",
+                [call.args[0] for call in output.call_args_list],
+            )
 
     def test_existing_stock_server_configuration_skips_softap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
