@@ -580,8 +580,10 @@ def wait_for_firmware(
     expected_mac: str | None,
     *,
     timeout: int = 180,
+    progress_label: str | None = None,
 ) -> DetectedFirmware:
     deadline = time.monotonic() + timeout
+    next_progress = time.monotonic() + 10
     last_project: str | None = None
     last_error: RuntimeError | None = None
     while time.monotonic() < deadline:
@@ -598,6 +600,10 @@ def wait_for_firmware(
             last_project = detected.identity.project_name
             if last_project == expected_project:
                 return detected
+        now = time.monotonic()
+        if progress_label is not None and now >= next_progress:
+            print(f"Still waiting for {progress_label}...")
+            next_progress = now + 10
         time.sleep(2)
     if last_project is not None:
         raise RuntimeError(
@@ -742,6 +748,12 @@ def main() -> None:
 
     project = Path(__file__).resolve().parent
     parent = project.parent
+    print(
+        "Installation takes place in two phases:\n"
+        "1. Install Kickstart, a temporary bridge that can start from Petkit's "
+        "stock firmware layout.\n"
+        "2. Use Kickstart to install the final ESPHome feeder firmware.\n"
+    )
     print("Preparing supporting projects...")
     compat = ensure_checkout(
         parent,
@@ -873,6 +885,7 @@ def main() -> None:
         return
 
     if detected is None:
+        print("\nPhase 1 of 2: install the temporary Kickstart bridge.")
         computer_ip = prompt(
             "This computer's IP address on the regular 2.4 GHz Wi-Fi network",
             detect_local_ip(),
@@ -953,8 +966,11 @@ def main() -> None:
                 )
             input(
                 "\nReconnect this computer to the regular 2.4 GHz Wi-Fi network, "
-                "then press Enter. Keep this installer running while the feeder "
-                "downloads and boots Kickstart.\n"
+                "then press Enter.\n"
+            )
+            print(
+                "Waiting for the feeder to contact this computer, download "
+                "Kickstart, and boot the temporary bridge..."
             )
             detected = wait_for_firmware(
                 python,
@@ -963,6 +979,7 @@ def main() -> None:
                 values["api_key"],
                 KICKSTART_PROJECT,
                 expected_mac,
+                progress_label="the temporary Kickstart bridge",
             )
         except BaseException:
             if server is not None and server_log is not None:
@@ -993,6 +1010,7 @@ def main() -> None:
         f"{detected.identity.mac_address}."
     )
 
+    print("\nPhase 2 of 2: install the final ESPHome feeder firmware.")
     recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
     print("Saving the 2 MiB recovery image...")
     download_recovery(
@@ -1038,6 +1056,7 @@ def main() -> None:
             values["api_key"],
             FINAL_PROJECT,
             expected_mac,
+            progress_label="the final ESPHome feeder firmware",
         )
     except RuntimeError as error:
         if migration_error is not None:

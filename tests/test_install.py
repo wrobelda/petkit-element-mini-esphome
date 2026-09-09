@@ -774,6 +774,7 @@ class MainResumeTest(unittest.TestCase):
                 _api_key: str,
                 expected_project: str,
                 _expected_mac: str | None,
+                **_kwargs: object,
             ) -> install.DetectedFirmware:
                 if expected_project == install.KICKSTART_PROJECT:
                     return kickstart
