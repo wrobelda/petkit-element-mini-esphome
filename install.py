@@ -25,7 +25,7 @@ REPOSITORIES = {
     "esphome-kickstart": "https://github.com/wrobelda/esphome-kickstart.git",
 }
 REPOSITORY_REVISIONS = {
-    "petkit-compat-server": "cdc504c2824cd7eeaccdaf67df13776d0a1ab4a3",
+    "petkit-compat-server": "bdfe4d73916c3dba18bcd7063950211897c83096",
     "esphome-kickstart": "2edf44146b259712228b01146ca3880e04cf89b7",
 }
 ALLOWED_REPOSITORY_ORIGINS = {
@@ -704,7 +704,9 @@ def require_build_artifact(path: Path, description: str) -> None:
         raise RuntimeError(f"{description} was not created at {path}")
 
 
-def server_received_device_request(path: Path) -> bool:
+def server_log_has_event(
+    path: Path, event_name: str, required_fields: dict[str, object] | None = None
+) -> bool:
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
@@ -714,20 +716,35 @@ def server_received_device_request(path: Path) -> bool:
             event = json.loads(line)
         except json.JSONDecodeError:
             continue
-        if isinstance(event, dict) and event.get("event") == "request":
+        if not isinstance(event, dict) or event.get("event") != event_name:
+            continue
+        if required_fields is None or all(
+            event.get(key) == value for key, value in required_fields.items()
+        ):
             return True
     return False
 
 
-def wait_for_server_request(
-    path: Path, server: subprocess.Popen[bytes], *, timeout: int = 10
+def wait_for_server_event(
+    path: Path,
+    server: subprocess.Popen[bytes],
+    event_name: str,
+    *,
+    required_fields: dict[str, object] | None = None,
+    timeout: int = 10,
+    progress_label: str | None = None,
 ) -> bool:
     deadline = time.monotonic() + timeout
+    next_progress = time.monotonic() + 10
     while time.monotonic() < deadline:
         if server.poll() is not None:
             raise RuntimeError("the local Petkit API server stopped")
-        if server_received_device_request(path):
+        if server_log_has_event(path, event_name, required_fields):
             return True
+        now = time.monotonic()
+        if progress_label is not None and now >= next_progress:
+            print(f"Still waiting for {progress_label}...")
+            next_progress = now + 10
         time.sleep(1)
     return False
 
@@ -1012,8 +1029,8 @@ def main() -> None:
                 "Checking whether the stock feeder already contacts this "
                 "computer..."
             )
-            already_provisioned = not args.debug and wait_for_server_request(
-                server_log_path, server
+            already_provisioned = not args.debug and wait_for_server_event(
+                server_log_path, server, "request"
             )
             if already_provisioned:
                 print(
@@ -1059,10 +1076,38 @@ def main() -> None:
                     "\nReconnect this computer to the regular 2.4 GHz Wi-Fi "
                     "network, then press Enter.\n"
                 )
-            print(
-                "Waiting for the feeder to contact this computer, download "
-                "Kickstart, and boot the temporary bridge..."
-            )
+            if not args.debug:
+                if already_provisioned:
+                    print("✓ The feeder contacted this computer.")
+                else:
+                    print("Waiting for the feeder to contact this computer...")
+                    if not wait_for_server_event(
+                        server_log_path,
+                        server,
+                        "request",
+                        timeout=180,
+                        progress_label="the feeder to contact this computer",
+                    ):
+                        raise RuntimeError(
+                            "the feeder did not contact the local compatibility "
+                            "server within 180 seconds"
+                        )
+                    print("✓ The feeder contacted this computer.")
+                print("Waiting for the feeder to download Kickstart...")
+                if not wait_for_server_event(
+                    server_log_path,
+                    server,
+                    "ota_transfer_complete",
+                    required_fields={"image_complete": True},
+                    timeout=180,
+                    progress_label="the Kickstart download",
+                ):
+                    raise RuntimeError(
+                        "the feeder did not finish downloading Kickstart within "
+                        "180 seconds"
+                    )
+                print("✓ Kickstart download completed.")
+            print("Waiting for the temporary Kickstart bridge to boot...")
             detected = wait_for_firmware(
                 python,
                 project,

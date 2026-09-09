@@ -328,14 +328,30 @@ class ServerRequestTest(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            self.assertTrue(install.server_received_device_request(path))
+            self.assertTrue(install.server_log_has_event(path, "request"))
 
     def test_absent_request_is_not_prior_provisioning(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "server.log"
             path.write_text('{"event":"ota_offer"}\n', encoding="utf-8")
 
-            self.assertFalse(install.server_received_device_request(path))
+            self.assertFalse(install.server_log_has_event(path, "request"))
+
+    def test_matches_required_event_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "server.log"
+            path.write_text(
+                '{"event":"ota_transfer_complete","image_complete":true}\n',
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                install.server_log_has_event(
+                    path,
+                    "ota_transfer_complete",
+                    {"image_complete": True},
+                )
+            )
 
 
 class DeviceIdentityTest(unittest.TestCase):
@@ -910,7 +926,9 @@ class MainResumeTest(unittest.TestCase):
                 )
                 stack.enter_context(
                     mock.patch.object(
-                        install, "wait_for_server_request", return_value=False
+                        install,
+                        "wait_for_server_event",
+                        side_effect=[False, True, True],
                     )
                 )
                 stack.enter_context(mock.patch.object(install.time, "sleep"))
@@ -977,7 +995,9 @@ class MainResumeTest(unittest.TestCase):
                 )
                 stack.enter_context(
                     mock.patch.object(
-                        install, "wait_for_server_request", return_value=True
+                        install,
+                        "wait_for_server_event",
+                        side_effect=[True, True],
                     )
                 )
                 provision = stack.enter_context(
