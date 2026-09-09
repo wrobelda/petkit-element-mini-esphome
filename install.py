@@ -25,7 +25,7 @@ REPOSITORIES = {
     "esphome-kickstart": "https://github.com/wrobelda/esphome-kickstart.git",
 }
 REPOSITORY_REVISIONS = {
-    "petkit-compat-server": "bdfe4d73916c3dba18bcd7063950211897c83096",
+    "petkit-compat-server": "a15294d796930dc9f681c9611f48f30e5bd96c25",
     "esphome-kickstart": "2edf44146b259712228b01146ca3880e04cf89b7",
 }
 ALLOWED_REPOSITORY_ORIGINS = {
@@ -268,55 +268,6 @@ def detect_local_ip() -> str:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.connect(("192.0.2.1", 9))
         return str(sock.getsockname()[0])
-
-
-def confirm_firewalld_port(computer_ip: str, port: int) -> None:
-    firewall_cmd = shutil.which("firewall-cmd")
-    ip_command = shutil.which("ip")
-    if firewall_cmd is None or ip_command is None:
-        return
-    addresses = subprocess.run(
-        [ip_command, "-o", "-4", "address", "show"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if addresses.returncode != 0:
-        return
-    interface: str | None = None
-    for line in addresses.stdout.splitlines():
-        fields = line.split()
-        if len(fields) >= 4 and fields[2] == "inet":
-            address = fields[3].split("/", 1)[0]
-            if address == computer_ip:
-                interface = fields[1].split("@", 1)[0]
-                break
-    if interface is None:
-        return
-    zone_result = subprocess.run(
-        [firewall_cmd, "--get-zone-of-interface", interface],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    zone = zone_result.stdout.strip()
-    if zone_result.returncode != 0 or not zone:
-        return
-    allowed = subprocess.run(
-        [firewall_cmd, f"--zone={zone}", f"--query-port={port}/tcp"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if allowed.returncode == 0:
-        return
-    input(
-        f"\nTCP port {port} is not allowed in firewalld zone {zone!r} for "
-        f"interface {interface!r}. Run this command in another terminal:\n\n"
-        f"  sudo firewall-cmd --zone={zone} --add-port={port}/tcp\n\n"
-        "Then press Enter. If another firewall rule already permits the port, "
-        "press Enter without changing it.\n"
-    )
 
 
 def current_wifi_ssid() -> str | None:
@@ -733,9 +684,12 @@ def wait_for_server_event(
     required_fields: dict[str, object] | None = None,
     timeout: int = 10,
     progress_label: str | None = None,
+    delayed_message: str | None = None,
+    message_delay: int = 30,
 ) -> bool:
     deadline = time.monotonic() + timeout
     next_progress = time.monotonic() + 10
+    message_at = time.monotonic() + message_delay
     while time.monotonic() < deadline:
         if server.poll() is not None:
             raise RuntimeError("the local Petkit API server stopped")
@@ -745,6 +699,9 @@ def wait_for_server_event(
         if progress_label is not None and now >= next_progress:
             print(f"Still waiting for {progress_label}...")
             next_progress = now + 10
+        if delayed_message is not None and now >= message_at:
+            print(f"\n{delayed_message}")
+            delayed_message = None
         time.sleep(1)
     return False
 
@@ -984,7 +941,6 @@ def main() -> None:
             "This computer's IP address on the regular 2.4 GHz Wi-Fi network",
             detect_local_ip(),
         )
-        confirm_firewalld_port(computer_ip, 8080)
         timezone_name = values["timezone"]
         offset = datetime.now().astimezone().utcoffset()
         timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
@@ -1087,6 +1043,15 @@ def main() -> None:
                         "request",
                         timeout=180,
                         progress_label="the feeder to contact this computer",
+                        delayed_message=(
+                            "No connection has arrived yet. TCP port 8080 on "
+                            f"{computer_ip} must be reachable from the regular "
+                            "Wi-Fi network. On another device connected to that "
+                            "network, open this address in a web browser:\n\n"
+                            f"  http://{computer_ip}:8080/\n\n"
+                            "A response showing status 'ready' proves that the "
+                            "server is reachable."
+                        ),
                     ):
                         raise RuntimeError(
                             "the feeder did not contact the local compatibility "

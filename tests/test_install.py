@@ -609,59 +609,6 @@ class WifiDetectionTest(unittest.TestCase):
         user_input.assert_called_once()
 
 
-class FirewallCheckTest(unittest.TestCase):
-    def test_warns_for_the_zone_attached_to_the_selected_address(self) -> None:
-        addresses = subprocess.CompletedProcess(
-            [],
-            0,
-            stdout="3: wld0 inet 10.0.0.100/22 brd 10.0.3.255 scope global wld0\n",
-            stderr="",
-        )
-        zone = subprocess.CompletedProcess([], 0, stdout="home\n", stderr="")
-        blocked = subprocess.CompletedProcess([], 1, stdout="no\n", stderr="")
-        with (
-            mock.patch.object(
-                install.shutil,
-                "which",
-                side_effect=lambda name: f"/usr/bin/{name}",
-            ),
-            mock.patch.object(
-                install.subprocess,
-                "run",
-                side_effect=[addresses, zone, blocked],
-            ) as subprocess_run,
-            mock.patch("builtins.input", return_value="") as user_input,
-        ):
-            install.confirm_firewalld_port("10.0.0.100", 8080)
-
-        self.assertEqual(
-            subprocess_run.call_args_list[-1].args[0],
-            ["/usr/bin/firewall-cmd", "--zone=home", "--query-port=8080/tcp"],
-        )
-        self.assertIn("--zone=home --add-port=8080/tcp", user_input.call_args.args[0])
-
-    def test_does_not_prompt_when_the_active_zone_allows_the_port(self) -> None:
-        addresses = subprocess.CompletedProcess(
-            [], 0, stdout="3: wld0 inet 10.0.0.100/22 scope global wld0\n", stderr=""
-        )
-        zone = subprocess.CompletedProcess([], 0, stdout="home\n", stderr="")
-        allowed = subprocess.CompletedProcess([], 0, stdout="yes\n", stderr="")
-        with (
-            mock.patch.object(
-                install.shutil,
-                "which",
-                side_effect=lambda name: f"/usr/bin/{name}",
-            ),
-            mock.patch.object(
-                install.subprocess, "run", side_effect=[addresses, zone, allowed]
-            ),
-            mock.patch("builtins.input") as user_input,
-        ):
-            install.confirm_firewalld_port("10.0.0.100", 8080)
-
-        user_input.assert_not_called()
-
-
 class OrchestrationResultTest(unittest.TestCase):
     def test_provisioner_accepts_only_confirmed_or_indeterminate_commit(self) -> None:
         with mock.patch.object(
@@ -693,6 +640,33 @@ class OrchestrationResultTest(unittest.TestCase):
                 subprocess.CalledProcessError(22, ["curl"])
             )
         )
+
+
+class ServerEventWaitTest(unittest.TestCase):
+    def test_prints_delayed_guidance_once(self) -> None:
+        server = mock.Mock()
+        server.poll.return_value = None
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(
+                install.time,
+                "monotonic",
+                side_effect=[0, 0, 0, 0, 31, 36],
+            ),
+            mock.patch.object(install.time, "sleep"),
+            mock.patch("builtins.print") as output,
+        ):
+            self.assertFalse(
+                install.wait_for_server_event(
+                    Path(directory) / "server.log",
+                    server,
+                    "request",
+                    timeout=35,
+                    delayed_message="Open the status page in a browser.",
+                )
+            )
+
+        output.assert_called_once_with("\nOpen the status page in a browser.")
 
 
 class MainResumeTest(unittest.TestCase):
@@ -740,7 +714,6 @@ class MainResumeTest(unittest.TestCase):
                 "load_or_create_secrets",
                 return_value=self.SECRETS,
             ),
-            mock.patch.object(install, "confirm_firewalld_port"),
             mock.patch.object(install, "require_build_artifact"),
             mock.patch.object(sys, "argv", ["install.py"]),
         )
