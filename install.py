@@ -73,30 +73,81 @@ class DetectedFirmware:
     identity: DeviceIdentity
 
 
-def run(command: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> None:
-    print(f"\n+ {' '.join(command)}")
-    subprocess.run(command, cwd=cwd, env=env, check=True)
+def report_process_failure(result: subprocess.CompletedProcess[str]) -> None:
+    for output in (result.stdout, result.stderr):
+        if output:
+            print(output.rstrip(), file=sys.stderr)
+
+
+def run(
+    command: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None = None,
+    debug: bool = False,
+) -> None:
+    if debug:
+        print(f"\n+ {' '.join(command)}")
+        subprocess.run(command, cwd=cwd, env=env, check=True)
+        return
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        report_process_failure(result)
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            command,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
 
 
 def run_authenticated_curl(
-    arguments: list[str], *, username: str, password: str, cwd: Path
+    arguments: list[str],
+    *,
+    username: str,
+    password: str,
+    cwd: Path,
+    debug: bool = False,
 ) -> None:
     def quote(value: str) -> str:
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
     command = ["curl", "--config", "-", "--digest", "--fail-with-body", *arguments]
-    print(f"\n+ curl --config - {' '.join(command[3:])}")
-    subprocess.run(
+    if debug:
+        print(f"\n+ curl --config - {' '.join(command[3:])}")
+    result = subprocess.run(
         command,
         cwd=cwd,
         input=f'user = "{quote(username)}:{quote(password)}"\n',
         text=True,
-        check=True,
+        check=False,
+        capture_output=not debug,
     )
+    if result.returncode != 0:
+        report_process_failure(result)
+        raise subprocess.CalledProcessError(
+            result.returncode,
+            command,
+            output=result.stdout,
+            stderr=result.stderr,
+        )
 
 
 def download_recovery(
-    path: Path, *, url: str, username: str, password: str, cwd: Path
+    path: Path,
+    *,
+    url: str,
+    username: str,
+    password: str,
+    cwd: Path,
+    debug: bool = False,
 ) -> None:
     descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     os.close(descriptor)
@@ -106,6 +157,7 @@ def download_recovery(
             username=username,
             password=password,
             cwd=cwd,
+            debug=debug,
         )
         path.chmod(0o600)
     except BaseException:
@@ -517,15 +569,29 @@ def wait_for_firmware(
 
 
 def run_provisioner(
-    command: list[str], *, cwd: Path, env: dict[str, str]
+    command: list[str], *, cwd: Path, env: dict[str, str], debug: bool = False
 ) -> bool:
-    print(f"\n+ {' '.join(command)}")
-    result = subprocess.run(command, cwd=cwd, env=env, check=False)
+    if debug:
+        print(f"\n+ {' '.join(command)}")
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        env=env,
+        check=False,
+        capture_output=not debug,
+        text=not debug,
+    )
     if result.returncode == 0:
         return True
     if result.returncode == PROVISION_COMMIT_OUTCOME_UNKNOWN_EXIT:
         return False
-    raise subprocess.CalledProcessError(result.returncode, command)
+    report_process_failure(result)
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        command,
+        output=result.stdout,
+        stderr=result.stderr,
+    )
 
 
 def migration_result_is_ambiguous(error: subprocess.CalledProcessError) -> bool:
@@ -591,13 +657,20 @@ def validate_checkout(path: Path, name: str, revision: str) -> None:
         )
 
 
-def ensure_checkout(parent: Path, name: str, url: str, revision: str) -> Path:
+def ensure_checkout(
+    parent: Path,
+    name: str,
+    url: str,
+    revision: str,
+    *,
+    debug: bool = False,
+) -> Path:
     path = parent / name
     if path.is_dir():
         validate_checkout(path, name, revision)
         return path
-    run(["git", "clone", url, name], cwd=parent)
-    run(["git", "checkout", "--detach", revision], cwd=path)
+    run(["git", "clone", url, name], cwd=parent, debug=debug)
+    run(["git", "checkout", "--detach", revision], cwd=path, debug=debug)
     validate_checkout(path, name, revision)
     return path
 
@@ -631,31 +704,49 @@ def main() -> None:
         default="petkit-feeder.local",
         help="final ESPHome hostname or IP address",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="show commands and diagnostic output",
+    )
     args = parser.parse_args()
 
     project = Path(__file__).resolve().parent
     parent = project.parent
+    print("Preparing supporting projects...")
     compat = ensure_checkout(
         parent,
         "petkit-compat-server",
         REPOSITORIES["petkit-compat-server"],
         REPOSITORY_REVISIONS["petkit-compat-server"],
+        debug=args.debug,
     )
     kickstart = ensure_checkout(
         parent,
         "esphome-kickstart",
         REPOSITORIES["esphome-kickstart"],
         REPOSITORY_REVISIONS["esphome-kickstart"],
+        debug=args.debug,
     )
     if shutil.which("curl") is None:
         raise SystemExit("curl is required for the authenticated migration upload")
 
     venv = project / ".venv"
     if not venv.exists():
-        run([sys.executable, "-m", "venv", str(venv)], cwd=project)
+        print("Creating the Python build environment...")
+        run(
+            [sys.executable, "-m", "venv", str(venv)],
+            cwd=project,
+            debug=args.debug,
+        )
     python = venv / "bin" / "python"
     esphome = venv / "bin" / "esphome"
-    run([str(python), "-m", "pip", "install", "esphome==2026.9.0b1"], cwd=project)
+    print("Preparing ESPHome build dependencies...")
+    run(
+        [str(python), "-m", "pip", "install", "esphome==2026.9.0b1"],
+        cwd=project,
+        debug=args.debug,
+    )
 
     secrets_path = project / "esphome" / "secrets.yaml"
     values = load_or_create_secrets(secrets_path, python)
@@ -682,8 +773,20 @@ def main() -> None:
 
     build_env = os.environ.copy()
     build_env["KICKSTART_COMPONENTS_PATH"] = str((kickstart / "components").resolve())
-    run([str(esphome), "compile", "petkit-kickstart.yaml"], cwd=project / "esphome", env=build_env)
-    run([str(esphome), "compile", "petkit-feeder.yaml"], cwd=project / "esphome", env=build_env)
+    print("Building the Kickstart transition firmware...")
+    run(
+        [str(esphome), "compile", "petkit-kickstart.yaml"],
+        cwd=project / "esphome",
+        env=build_env,
+        debug=args.debug,
+    )
+    print("Building the final feeder firmware...")
+    run(
+        [str(esphome), "compile", "petkit-feeder.yaml"],
+        cwd=project / "esphome",
+        env=build_env,
+        debug=args.debug,
+    )
 
     release = project / "local-cache" / "release"
     release.mkdir(parents=True, exist_ok=True)
@@ -698,6 +801,7 @@ def main() -> None:
     )
     require_build_artifact(transition_elf, "Kickstart ELF")
     require_build_artifact(factory, "final ESPHome factory image")
+    print("Packaging the stock-compatible Kickstart image...")
     run(
         [
             str(python),
@@ -718,10 +822,12 @@ def main() -> None:
             str(transition),
         ],
         cwd=project,
+        debug=args.debug,
     )
 
     state_path = project / INSTALL_STATE
     expected_mac = load_expected_mac(state_path)
+    print("Checking for an existing Kickstart or final ESPHome installation...")
     detected = detect_running_firmware(
         python,
         project,
@@ -747,6 +853,8 @@ def main() -> None:
         timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
         firewall_added = configure_firewall()
         server: subprocess.Popen[bytes] | None = None
+        server_log = None
+        server_log_path = project / "local-cache" / "compat-server.log"
         try:
             input(
                 "\nPut the feeder in setup mode. After the confirmation beep, "
@@ -767,9 +875,23 @@ def main() -> None:
             )
             softap_ssid = wait_for_wifi_network(PETKIT_SOFTAP_PREFIX)
             print(f"Connected to {softap_ssid!r}.")
+            popen_output: dict[str, object] = {}
+            if not args.debug:
+                descriptor = os.open(
+                    server_log_path,
+                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                    0o600,
+                )
+                server_log = os.fdopen(descriptor, "w", encoding="utf-8")
+                popen_output = {
+                    "stdout": server_log,
+                    "stderr": subprocess.STDOUT,
+                }
+            print("Starting the local compatibility server...")
             server = subprocess.Popen(
                 [
                     str(python),
+                    "-u",
                     "serve_petkit_api.py",
                     "--host",
                     "0.0.0.0",
@@ -781,12 +903,14 @@ def main() -> None:
                     str(transition),
                 ],
                 cwd=compat,
+                **popen_output,
             )
             time.sleep(1)
             if server.poll() is not None:
                 raise RuntimeError("the local Petkit API server did not start")
             provision_env = os.environ.copy()
             provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
+            print("Sending the Wi-Fi and local-server settings to the feeder...")
             acknowledged = run_provisioner(
                 [
                     str(python),
@@ -805,6 +929,7 @@ def main() -> None:
                 ],
                 cwd=compat,
                 env=provision_env,
+                debug=args.debug,
             )
             if not acknowledged:
                 print(
@@ -825,6 +950,13 @@ def main() -> None:
                 KICKSTART_PROJECT,
                 expected_mac,
             )
+        except BaseException:
+            if server is not None and server_log is not None:
+                server_log.flush()
+                diagnostics = server_log_path.read_text(encoding="utf-8").strip()
+                if diagnostics:
+                    print(diagnostics, file=sys.stderr)
+            raise
         finally:
             if server is not None:
                 server.terminate()
@@ -832,6 +964,8 @@ def main() -> None:
                     server.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     server.kill()
+            if server_log is not None:
+                server_log.close()
             if firewall_added:
                 subprocess.run(
                     ["sudo", "firewall-cmd", "--remove-port=8080/tcp"],
@@ -852,17 +986,20 @@ def main() -> None:
     )
 
     recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
+    print("Saving the 2 MiB recovery image...")
     download_recovery(
         recovery,
         url=f"http://{kickstart_host}/hub/flash_read",
         username=values["kickstart_web_username"],
         password=values["kickstart_web_password"],
         cwd=project,
+        debug=args.debug,
     )
     if recovery.stat().st_size != 0x200000:
         raise RuntimeError("Kickstart recovery download is not 2 MiB")
 
     migration_error: subprocess.CalledProcessError | None = None
+    print("Installing the final feeder firmware...")
     try:
         run_authenticated_curl(
             [
@@ -873,6 +1010,7 @@ def main() -> None:
             username=values["kickstart_web_username"],
             password=values["kickstart_web_password"],
             cwd=project,
+            debug=args.debug,
         )
     except subprocess.CalledProcessError as error:
         if not migration_result_is_ambiguous(error):

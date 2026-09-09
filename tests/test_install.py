@@ -219,6 +219,45 @@ class CheckoutTest(unittest.TestCase):
                 )
 
 
+class ProcessOutputTest(unittest.TestCase):
+    def test_run_hides_successful_command_output_by_default(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["tool"], 0, stdout="diagnostic output\n", stderr=""
+        )
+        with mock.patch.object(
+            install.subprocess, "run", return_value=result
+        ) as subprocess_run:
+            install.run(["tool"], cwd=Path("."))
+
+        self.assertTrue(subprocess_run.call_args.kwargs["capture_output"])
+        self.assertTrue(subprocess_run.call_args.kwargs["text"])
+
+    def test_run_prints_captured_output_when_command_fails(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["tool"], 2, stdout="build context\n", stderr="build failed\n"
+        )
+        with (
+            mock.patch.object(install.subprocess, "run", return_value=result),
+            mock.patch.object(install.sys, "stderr") as stderr,
+        ):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                install.run(["tool"], cwd=Path("."))
+
+        self.assertEqual(raised.exception.stdout, "build context\n")
+        self.assertEqual(raised.exception.stderr, "build failed\n")
+        self.assertEqual(
+            [call.args[0] for call in stderr.write.call_args_list],
+            ["build context", "\n", "build failed", "\n"],
+        )
+
+    def test_run_shows_command_and_inherits_output_in_debug_mode(self) -> None:
+        with mock.patch.object(install.subprocess, "run") as subprocess_run:
+            install.run(["tool", "argument"], cwd=Path("."), debug=True)
+
+        self.assertNotIn("capture_output", subprocess_run.call_args.kwargs)
+        self.assertTrue(subprocess_run.call_args.kwargs["check"])
+
+
 class RecoveryDownloadTest(unittest.TestCase):
     def test_creates_private_recovery_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -496,6 +535,7 @@ class MainResumeTest(unittest.TestCase):
             name: str,
             _url: str,
             _revision: str,
+            **_kwargs: object,
         ) -> Path:
             if name == "petkit-compat-server":
                 return compat
@@ -665,7 +705,7 @@ class MainResumeTest(unittest.TestCase):
                     )
                 )
                 stack.enter_context(mock.patch.object(install, "run_authenticated_curl"))
-                stack.enter_context(
+                popen = stack.enter_context(
                     mock.patch.object(
                         install.subprocess, "Popen", side_effect=start_server
                     )
@@ -712,6 +752,10 @@ class MainResumeTest(unittest.TestCase):
                     "regular-wifi-reconnected",
                 ],
             )
+            popen_kwargs = popen.call_args.kwargs
+            self.assertIn("stdout", popen_kwargs)
+            self.assertEqual(popen_kwargs["stderr"], subprocess.STDOUT)
+            self.assertIn("-u", popen.call_args.args[0])
 
 if __name__ == "__main__":
     unittest.main()
