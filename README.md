@@ -238,7 +238,7 @@ final bootloader write is one situation that can require this procedure.
    PORT='/dev/ttyUSB0'
    BACKUP='petkit-post-kickstart.bin'
    .venv/bin/esptool --chip esp8266 --port "$PORT" --baud 460800 write-flash \
-     --flash-size 2MB 0x0 "$BACKUP"
+     0x0 "$BACKUP"
    ```
 
    If the serial connection is unreliable, retry without `--baud 460800`.
