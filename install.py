@@ -270,6 +270,55 @@ def detect_local_ip() -> str:
         return str(sock.getsockname()[0])
 
 
+def confirm_firewalld_port(computer_ip: str, port: int) -> None:
+    firewall_cmd = shutil.which("firewall-cmd")
+    ip_command = shutil.which("ip")
+    if firewall_cmd is None or ip_command is None:
+        return
+    addresses = subprocess.run(
+        [ip_command, "-o", "-4", "address", "show"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if addresses.returncode != 0:
+        return
+    interface: str | None = None
+    for line in addresses.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[2] == "inet":
+            address = fields[3].split("/", 1)[0]
+            if address == computer_ip:
+                interface = fields[1].split("@", 1)[0]
+                break
+    if interface is None:
+        return
+    zone_result = subprocess.run(
+        [firewall_cmd, "--get-zone-of-interface", interface],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    zone = zone_result.stdout.strip()
+    if zone_result.returncode != 0 or not zone:
+        return
+    allowed = subprocess.run(
+        [firewall_cmd, f"--zone={zone}", f"--query-port={port}/tcp"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if allowed.returncode == 0:
+        return
+    input(
+        f"\nTCP port {port} is not allowed in firewalld zone {zone!r} for "
+        f"interface {interface!r}. Run this command in another terminal:\n\n"
+        f"  sudo firewall-cmd --zone={zone} --add-port={port}/tcp\n\n"
+        "Then press Enter. If another firewall rule already permits the port, "
+        "press Enter without changing it.\n"
+    )
+
+
 def current_wifi_ssid() -> str | None:
     nmcli = shutil.which("nmcli")
     if nmcli is not None:
@@ -918,6 +967,7 @@ def main() -> None:
             "This computer's IP address on the regular 2.4 GHz Wi-Fi network",
             detect_local_ip(),
         )
+        confirm_firewalld_port(computer_ip, 8080)
         timezone_name = values["timezone"]
         offset = datetime.now().astimezone().utcoffset()
         timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
