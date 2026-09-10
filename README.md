@@ -26,11 +26,6 @@ not require opening the feeder. Both procedures save a recovery backup before
 relocating or converting Kickstart; see [Recovery and rollback](#recovery-and-rollback)
 if you need to restore it.
 
-**Development status:** the guided installer and the manual procedure below use
-a Kickstart checkout containing the self-converting interface. The transition
-profile also needs the safe-mode protection described in the
-[Kickstart component guide][transition-component].
-
 ### Guided installation
 
 The guided installer handles the migration up to the final ESPHome firmware:
@@ -76,11 +71,8 @@ git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
 git clone https://github.com/wrobelda/petkit-compat-server.git
 git clone https://github.com/wrobelda/esphome-kickstart.git
 git -C petkit-compat-server checkout --detach 91bf4d57e1dceecc48eccde936d1532e3fd5e972
+git -C esphome-kickstart checkout --detach 07a195fc1f036bcbd9c9d124a80cb85585172b58
 ```
-
-Select a Kickstart revision containing the self-conversion interface before
-building. The older `2edf441` revision used by the guided installer does not
-support this procedure; do not mix its upload interface with these commands.
 
 #### 2. Configure and build both ESPHome images
 
@@ -355,4 +347,3 @@ cd esphome/tests
 Open work and hardware checks are tracked in [TODO.md](TODO.md).
 
 [nonos-hardware]: https://github.com/wrobelda/petkit-compat-server/blob/main/devices/esp8266/nonos_v2/HARDWARE.md
-[transition-component]: https://github.com/wrobelda/esphome-kickstart/blob/master/components/esp8266_nonos_v2_to_eboot_v1/README.md#ordinary-ota-and-device-builder
