@@ -86,7 +86,11 @@ class DeviceMismatchError(RuntimeError):
 
 
 class WifiDetectionUnavailable(RuntimeError):
-    pass
+    """No usable Wi-Fi detector on this computer."""
+
+
+class WifiDetectionFailed(WifiDetectionUnavailable):
+    """The detector exists but one invocation failed; worth retrying."""
 
 
 class InstallationTimeout(RuntimeError):
@@ -481,7 +485,7 @@ def nmcli_wifi_list(nmcli: str, fields: str, *, rescan: bool, failure: str) -> l
         text=True,
     )
     if result.returncode != 0:
-        raise WifiDetectionUnavailable(failure)
+        raise WifiDetectionFailed(failure)
     return result.stdout.splitlines()
 
 
@@ -508,7 +512,7 @@ def current_wifi_ssid() -> str | None:
             text=True,
         )
         if ports.returncode != 0:
-            raise WifiDetectionUnavailable("macOS could not list network interfaces")
+            raise WifiDetectionFailed("macOS could not list network interfaces")
         interface: str | None = None
         lines = ports.stdout.splitlines()
         for index, line in enumerate(lines):
@@ -563,11 +567,11 @@ def available_wifi_ssids() -> list[str]:
             text=True,
         )
         if result.returncode != 0:
-            raise WifiDetectionUnavailable("macOS could not scan for Wi-Fi networks")
+            raise WifiDetectionFailed("macOS could not scan for Wi-Fi networks")
         try:
             report = json.loads(result.stdout)
         except json.JSONDecodeError:
-            raise WifiDetectionUnavailable("macOS returned an invalid Wi-Fi scan")
+            raise WifiDetectionFailed("macOS returned an invalid Wi-Fi scan")
         networks: set[str] = set()
 
         def collect(value: object, *, network_list: bool = False) -> None:
@@ -604,22 +608,37 @@ def available_wifi_ssids() -> list[str]:
 
 
 def wait_for_available_wifi_networks(prefix: str, *, timeout: int = 180) -> list[str]:
+    last_failure: WifiDetectionFailed | None = None
     for _ in poll(timeout):
-        matches = [ssid for ssid in available_wifi_ssids() if ssid.startswith(prefix)]
+        try:
+            ssids = available_wifi_ssids()
+        except WifiDetectionFailed as error:
+            # A scan can fail while the adapter is busy; keep trying.
+            last_failure = error
+            continue
+        matches = [ssid for ssid in ssids if ssid.startswith(prefix)]
         if matches:
             return matches
     raise TimeoutError(
         f"no Wi-Fi network beginning with {prefix!r} appeared within {timeout} seconds"
+        + (f" (last scan error: {last_failure})" if last_failure else "")
     )
 
 
 def wait_for_wifi_network(expected_ssid: str, *, timeout: int = 180) -> str:
+    last_failure: WifiDetectionFailed | None = None
     for _ in poll(timeout, interval=1):
-        ssid = current_wifi_ssid()
+        try:
+            ssid = current_wifi_ssid()
+        except WifiDetectionFailed as error:
+            # Reading the active network can fail while it is being switched.
+            last_failure = error
+            continue
         if ssid == expected_ssid:
             return ssid
     raise TimeoutError(
         f"Wi-Fi network {expected_ssid!r} was not connected within {timeout} seconds"
+        + (f" (last detector error: {last_failure})" if last_failure else "")
     )
 
 
@@ -635,9 +654,10 @@ def choose_wifi_network(ssids: list[str]) -> str:
         print("  Choose one of the listed Petkit setup networks.")
 
 
-def manual_wifi_fallback(error: Exception, instruction: str, *, debug: bool) -> None:
-    if debug:
-        print(f"  Automatic Wi-Fi detection unavailable: {error}")
+def manual_wifi_fallback(error: Exception, instruction: str) -> None:
+    # Always say why the automatic path gave up; a bare prompt after "the
+    # installer will continue automatically" reads as a contradiction.
+    print(f"  Automatic Wi-Fi detection did not confirm the switch: {error}")
     input(instruction)
 
 
@@ -656,7 +676,7 @@ def wait_for_wifi_network_or_manual(
     try:
         detected = wait_for_wifi_network(expected_ssid, timeout=timeout)
     except (WifiDetectionUnavailable, TimeoutError) as error:
-        manual_wifi_fallback(error, manual_instruction, debug=debug)
+        manual_wifi_fallback(error, manual_instruction)
         return
     print(f"  ✓ Connected to {detected!r}.")
 
@@ -682,7 +702,7 @@ def connect_to_petkit_setup_network(*, debug: bool = False) -> None:
             "will continue automatically."
         )
     except (WifiDetectionUnavailable, TimeoutError) as error:
-        manual_wifi_fallback(error, manual_instruction, debug=debug)
+        manual_wifi_fallback(error, manual_instruction)
         return
     wait_for_wifi_network_or_manual(
         selected_softap, manual_instruction=manual_instruction, debug=debug
