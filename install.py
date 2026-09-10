@@ -25,7 +25,7 @@ REPOSITORIES = {
     "esphome-kickstart": "https://github.com/wrobelda/esphome-kickstart.git",
 }
 REPOSITORY_REVISIONS = {
-    "petkit-compat-server": "44c02fe9b721db67b633cb70be1de8394d347ef9",
+    "petkit-compat-server": "91bf4d57e1dceecc48eccde936d1532e3fd5e972",
     "esphome-kickstart": "2edf44146b259712228b01146ca3880e04cf89b7",
 }
 ALLOWED_REPOSITORY_ORIGINS = {
@@ -1086,21 +1086,26 @@ def main() -> None:
                         "server within 180 seconds"
                     )
                 print("  ✓ The feeder contacted this computer.")
-            print("  • Waiting for the feeder to download Kickstart...")
+            print("  • Waiting for the stock firmware to accept Kickstart...")
             if not wait_for_server_event(
                 server_event_log_path,
                 server,
-                "ota_transfer_complete",
-                required_fields={"image_complete": True},
-                timeout=180,
-                progress_label="the Kickstart download",
+                "request",
+                required_fields={
+                    "method": "POST",
+                    "path": "/6/feedermini/dev_ota_start",
+                },
+                timeout=60,
+                progress_label="the stock firmware to accept Kickstart",
             ):
                 raise InstallationTimeout(
-                    "the feeder did not finish downloading Kickstart within "
-                    "180 seconds"
+                    "the stock firmware did not accept Kickstart within 60 seconds"
                 )
-            print("  ✓ Kickstart download completed.")
-            print("  • Waiting for the temporary Kickstart bridge to boot...")
+            print("  ✓ The stock firmware accepted Kickstart.")
+            print(
+                "  • Waiting for the feeder to download, validate, and boot "
+                "Kickstart..."
+            )
             detected = wait_for_firmware(
                 python,
                 project,
@@ -1108,6 +1113,7 @@ def main() -> None:
                 values["api_key"],
                 KICKSTART_PROJECT,
                 expected_mac,
+                timeout=600,
                 progress_label="the temporary Kickstart bridge",
             )
         except BaseException as error:

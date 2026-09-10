@@ -1047,6 +1047,13 @@ class MainResumeTest(unittest.TestCase):
                     "path": "/6/feedermini/dev_ota_check",
                 },
             )
+            self.assertEqual(
+                wait.call_args_list[1].kwargs["required_fields"],
+                {
+                    "method": "POST",
+                    "path": "/6/feedermini/dev_ota_start",
+                },
+            )
 
     def test_debug_keeps_existing_provisioning_and_download_waits(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
