@@ -78,11 +78,15 @@ logger:
   hardware_uart: UART1
   level: INFO
 
-# Pull the external component from the local components/ folder in this repo.
+# Pull the feeder component from this repository, so the file also works as a
+# Device Builder package outside this checkout.
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/wrobelda/petkit-element-mini-esphome
+      ref: master
+      path: esphome/components
+    components: [petkit_feeder]
 
 api:
   # Feed will keep working with no network, but expose it to HA when present.
