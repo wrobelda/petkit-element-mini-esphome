@@ -72,8 +72,11 @@ class SecretsTest(unittest.TestCase):
     def test_generated_secrets_include_timezone(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "secrets.yaml"
-            answers = iter(["TestWiFi", "wifi-password", "Europe/Warsaw", "ap-password", "admin", "web-password"])
-            with mock.patch.object(install, "prompt", side_effect=answers):
+            answers = iter(["TestWiFi", "wifi-password", "Europe/Warsaw", "ap-password", "admin", "web-password", "api-key"])
+            with (
+                mock.patch.object(install, "detect_wifi_ssid", return_value=None),
+                mock.patch.object(install, "prompt", side_effect=answers),
+            ):
                 values = install.write_secrets(path)
 
             self.assertEqual(values["timezone"], "Europe/Warsaw")
@@ -81,6 +84,31 @@ class SecretsTest(unittest.TestCase):
                 install.read_yaml_secrets(path, Path(sys.executable))["timezone"],
                 "Europe/Warsaw",
             )
+
+    def test_suggests_the_connected_network_for_wifi_ssid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "secrets.yaml"
+            answers = iter(["Home", "wifi-password", "Europe/Warsaw", "ap-password", "admin", "web-password", "api-key"])
+            with (
+                mock.patch.object(install, "detect_wifi_ssid", return_value="Home"),
+                mock.patch.object(install, "prompt", side_effect=answers) as prompt,
+            ):
+                install.write_secrets(path)
+
+            self.assertEqual(prompt.call_args_list[0].args[1], "Home")
+
+    def test_suggests_a_generated_api_key(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "secrets.yaml"
+            answers = iter(["Home", "wifi-password", "Europe/Warsaw", "ap-password", "admin", "web-password", "api-key"])
+            with (
+                mock.patch.object(install, "detect_wifi_ssid", return_value=None),
+                mock.patch.object(install, "prompt", side_effect=answers) as prompt,
+            ):
+                install.write_secrets(path)
+
+            default = prompt.call_args_list[6].args[1]
+            self.assertEqual(len(default), 44)
 
 
 class CheckoutTest(unittest.TestCase):
@@ -635,6 +663,42 @@ class WifiDetectionTest(unittest.TestCase):
 
         user_input.assert_called_once()
 
+    def test_reconnect_continues_when_the_switch_is_detected(self) -> None:
+        with (
+            mock.patch.object(
+                install, "wait_for_wifi_network", return_value="Home"
+            ) as wait,
+            mock.patch("builtins.input") as user_input,
+        ):
+            install.reconnect_to_regular_wifi_network("Home")
+
+        user_input.assert_not_called()
+        wait.assert_called_once()
+
+    def test_reconnect_falls_back_when_detection_is_unavailable(self) -> None:
+        with (
+            mock.patch.object(
+                install,
+                "wait_for_wifi_network",
+                side_effect=install.WifiDetectionUnavailable("unsupported"),
+            ),
+            mock.patch("builtins.input", return_value="") as user_input,
+        ):
+            install.reconnect_to_regular_wifi_network("Home")
+
+        user_input.assert_called_once()
+
+    def test_reconnect_falls_back_on_timeout(self) -> None:
+        with (
+            mock.patch.object(
+                install, "wait_for_wifi_network", side_effect=TimeoutError("no")
+            ),
+            mock.patch("builtins.input", return_value="") as user_input,
+        ):
+            install.reconnect_to_regular_wifi_network("Home")
+
+        user_input.assert_called_once()
+
 
 class OrchestrationResultTest(unittest.TestCase):
     def test_provisioner_accepts_only_confirmed_or_indeterminate_commit(self) -> None:
@@ -856,9 +920,14 @@ class MainResumeTest(unittest.TestCase):
             def input_answer(message: str) -> str:
                 if "Put the feeder in setup mode" in message:
                     events.append("setup-confirmed")
-                elif "Reconnect this computer" in message:
-                    events.append("regular-wifi-reconnected")
                 return ""
+
+            def wait_wifi(expected_ssid: str, **_kwargs: object) -> str:
+                if expected_ssid == "PETKIT_FEEDER_test":
+                    events.append("softap-connected")
+                else:
+                    events.append("regular-wifi-reconnected")
+                return expected_ssid
 
             def start_server(*_args: object, **_kwargs: object) -> mock.MagicMock:
                 events.append("server-started")
@@ -927,8 +996,7 @@ class MainResumeTest(unittest.TestCase):
                     mock.patch.object(
                         install,
                         "wait_for_wifi_network",
-                        side_effect=lambda _prefix: events.append("softap-connected")
-                        or "PETKIT_FEEDER_test",
+                        side_effect=wait_wifi,
                     )
                 )
                 stack.enter_context(
