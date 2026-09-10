@@ -673,6 +673,32 @@ class WifiDetectionTest(unittest.TestCase):
         user_input.assert_not_called()
         wait.assert_called_once()
 
+    def test_reconnect_continues_when_the_user_presses_enter(self) -> None:
+        with (
+            mock.patch.object(install, "wait_for_wifi_network", return_value=None),
+            mock.patch("builtins.input") as user_input,
+            mock.patch("builtins.print") as output,
+        ):
+            install.reconnect_to_regular_wifi_network("Home")
+
+        user_input.assert_not_called()
+        self.assertIn(
+            "  ✓ Continuing on the current network.",
+            [call.args[0] for call in output.call_args_list],
+        )
+
+    def test_enter_ends_the_network_wait_early(self) -> None:
+        with (
+            mock.patch.object(install, "stdin_has_input", side_effect=[False, True]),
+            mock.patch.object(install.sys, "stdin") as stdin,
+            mock.patch.object(install, "current_wifi_ssid", return_value="Other"),
+            mock.patch.object(install.time, "sleep"),
+        ):
+            result = install.wait_for_wifi_network("Home", timeout=5, allow_enter=True)
+
+        self.assertIsNone(result)
+        stdin.readline.assert_called_once()
+
     def test_reconnect_falls_back_when_detection_is_unavailable(self) -> None:
         with (
             mock.patch.object(

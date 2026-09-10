@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import select
 import shlex
 import shutil
 import socket
@@ -625,9 +626,27 @@ def wait_for_available_wifi_networks(prefix: str, *, timeout: int = 180) -> list
     )
 
 
-def wait_for_wifi_network(expected_ssid: str, *, timeout: int = 180) -> str:
+def stdin_has_input() -> bool:
+    """True when a line is waiting on stdin (a terminal Enter press)."""
+    try:
+        return bool(select.select([sys.stdin], [], [], 0)[0])
+    except (OSError, ValueError):
+        return False
+
+
+def wait_for_wifi_network(
+    expected_ssid: str, *, timeout: int = 180, allow_enter: bool = False
+) -> str | None:
+    """Wait for *expected_ssid* to become the active network.
+
+    With *allow_enter*, an Enter press ends the wait early and returns None,
+    so the user can stay on another network that also reaches the feeder.
+    """
     last_failure: WifiDetectionFailed | None = None
     for _ in poll(timeout, interval=1):
+        if allow_enter and stdin_has_input():
+            sys.stdin.readline()
+            return None
         try:
             ssid = current_wifi_ssid()
         except WifiDetectionFailed as error:
@@ -667,16 +686,23 @@ def wait_for_wifi_network_or_manual(
     manual_instruction: str,
     debug: bool = False,
     timeout: int = 180,
+    allow_enter: bool = False,
 ) -> None:
     """Wait for *expected_ssid*, falling back to a manual Enter prompt.
 
     Detection is best-effort: an unavailable detector or a timeout asks for
-    confirmation by Enter, so the manual path is never skipped.
+    confirmation by Enter, so the manual path is never skipped. With
+    *allow_enter*, Enter during the wait skips the switch altogether.
     """
     try:
-        detected = wait_for_wifi_network(expected_ssid, timeout=timeout)
+        detected = wait_for_wifi_network(
+            expected_ssid, timeout=timeout, allow_enter=allow_enter
+        )
     except (WifiDetectionUnavailable, TimeoutError) as error:
         manual_wifi_fallback(error, manual_instruction)
+        return
+    if detected is None:
+        print("  ✓ Continuing on the current network.")
         return
     print(f"  ✓ Connected to {detected!r}.")
 
@@ -712,12 +738,16 @@ def connect_to_petkit_setup_network(*, debug: bool = False) -> None:
 def reconnect_to_regular_wifi_network(
     ssid: str, *, debug: bool = False, timeout: int = 60
 ) -> None:
-    print(f"\n  → Reconnect this computer to the {ssid!r} network.")
+    print(
+        f"\n  → Reconnect this computer to the {ssid!r} network, or press Enter "
+        "to stay on the current network if it can reach the feeder."
+    )
     wait_for_wifi_network_or_manual(
         ssid,
         manual_instruction="    Press Enter when connected.\n",
         debug=debug,
         timeout=timeout,
+        allow_enter=True,
     )
 
 
