@@ -237,14 +237,16 @@ the migration even when the key or the node name changes:
 - The local build in `petkit-feeder-local.yaml` reuses the bridge's key from
   this checkout's `secrets.yaml`, so the installer can authenticate the final
   firmware immediately with the credentials it already holds.
-- Device Builder mints a new key when it takes control of the bridge and writes
-  it into the new configuration. After the install, Home Assistant's
-  re-authentication tries the keys it can find, including the one held by the
-  dashboard, and repairs its stored key without asking.
+- A configuration adopted in Device Builder must carry the bridge's key as
+  well: the package's OTA platform inherits the API key, and the bridge only
+  accepts an upload authenticated with its own. Device Builder cannot learn
+  that key on its own, so the user pastes it into the adopted YAML, where
+  per-device keys live. Should the feeder ever run with a different key,
+  Home Assistant's re-authentication tries the keys it can find, including
+  the one held by the dashboard, and repairs its stored key without asking.
 
-The final image must keep the API encrypted; the package's OTA platform
-inherits the API key, and configuration validation rejects an adopting YAML
-that provides none.
+The final image must keep the API encrypted; configuration validation rejects
+an adopting YAML that provides no key.
 
 ## Shared implementation
 

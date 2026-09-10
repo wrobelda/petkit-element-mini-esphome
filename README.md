@@ -254,13 +254,23 @@ Build the final firmware, then install it from the project directory:
 **Take Control in ESPHome Device Builder:** Kickstart advertises the feeder
 configuration, so Device Builder can discover it before or after conversion.
 Take Control only creates a configuration; it does not migrate Kickstart or
-install firmware. Taking control creates a new API encryption key for the
-feeder and writes it into the new configuration; after the install, Home
-Assistant re-authenticates with that key by itself. The package takes only the
-Wi-Fi credentials from Device Builder's `secrets.yaml`; the fallback access
-point is open unless the configuration sets the `fallback_ap_password`
-substitution, and the clocks use Device Builder's time zone unless it extends
-`hardware_time` and `homeassistant_time` with another one.
+install firmware. The new configuration must carry the bridge's API encryption
+key, because the first install authenticates with the bridge: replace the key
+Device Builder generated (or add the block if there is none) with the `api_key`
+from `esphome/secrets.yaml`, which the guided installer also prints:
+
+```yaml
+api:
+  encryption:
+    key: "<api_key from esphome/secrets.yaml>"
+```
+
+Home Assistant already uses that key, so it stays connected through the
+install. The package takes only the Wi-Fi credentials from Device Builder's
+`secrets.yaml`; the fallback access point is open unless the configuration sets
+the `fallback_ap_password` substitution, and the clocks use Device Builder's
+time zone unless it extends `hardware_time` and `homeassistant_time` with
+another one.
 
 Home Assistant should reuse the Kickstart device entry and rename it to Petkit
 Feeder. Future updates use ESPHome OTA.
