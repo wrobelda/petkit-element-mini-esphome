@@ -71,7 +71,7 @@ git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
 git clone https://github.com/wrobelda/petkit-compat-server.git
 git clone https://github.com/wrobelda/esphome-kickstart.git
 git -C petkit-compat-server checkout --detach 91bf4d57e1dceecc48eccde936d1532e3fd5e972
-git -C esphome-kickstart checkout --detach 07a195fc1f036bcbd9c9d124a80cb85585172b58
+git -C esphome-kickstart checkout --detach 7abd018a4ff051a6246d31e8b1dfce255f1d8b2a
 ```
 
 #### 2. Configure and build both ESPHome images

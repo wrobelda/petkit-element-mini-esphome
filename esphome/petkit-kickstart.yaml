@@ -143,23 +143,20 @@ text_sensor:
     ip_address:
       name: IP address
   - platform: template
-    name: "Active slot state"
+    name: "Layout type"
     entity_category: diagnostic
     update_interval: 5min
     lambda: |-
-      char buf[96];
-      snprintf(buf, sizeof(buf), "slot %u (%s), entry 0x%08X",
-               id(slot_control)->active_slot_number(),
-               id(slot_control)->active_slot_valid() ? "valid" : "invalid",
-               id(slot_control)->active_slot_entry());
-      return { buf };
-  - platform: template
-    name: "Inactive slot state"
-    entity_category: diagnostic
-    update_interval: 5min
-    lambda: |-
-      char buf[96];
-      snprintf(buf, sizeof(buf), "%s, entry 0x%08X",
-               id(slot_control)->inactive_slot_valid() ? "valid" : "invalid",
-               id(slot_control)->inactive_slot_entry());
+      char buf[160];
+      if (id(migration)->layout_is_eboot()) {
+        snprintf(buf, sizeof(buf), "eboot V1");
+      } else {
+        snprintf(buf, sizeof(buf),
+                 "V2, slot %u (%s) entry 0x%08X, other slot %s entry 0x%08X",
+                 id(slot_control)->active_slot_number(),
+                 id(slot_control)->active_slot_valid() ? "valid" : "invalid",
+                 id(slot_control)->active_slot_entry(),
+                 id(slot_control)->inactive_slot_valid() ? "valid" : "invalid",
+                 id(slot_control)->inactive_slot_entry());
+      }
       return { buf };

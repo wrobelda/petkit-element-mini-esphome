@@ -30,7 +30,7 @@ REPOSITORIES = {
 }
 REPOSITORY_REVISIONS = {
     "petkit-compat-server": "91bf4d57e1dceecc48eccde936d1532e3fd5e972",
-    "esphome-kickstart": "07a195fc1f036bcbd9c9d124a80cb85585172b58",
+    "esphome-kickstart": "7abd018a4ff051a6246d31e8b1dfce255f1d8b2a",
 }
 ALLOWED_REPOSITORY_ORIGINS = {
     "petkit-compat-server": {"wrobelda/petkit-compat-server"},
