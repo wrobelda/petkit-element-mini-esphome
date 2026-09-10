@@ -204,7 +204,7 @@ reference captures and stock firmware.
 | Path | Purpose |
 |---|---|
 | [`petkit-feeder.yaml`](petkit-feeder.yaml) | Device configuration, entities, and local schedules; the package Kickstart advertises for Device Builder |
-| [`petkit-feeder-local.yaml`](petkit-feeder-local.yaml) | Local build of that package with this checkout's API key, fallback-AP password, and time zone |
+| [`petkit-feeder-local.yaml`](petkit-feeder-local.yaml) | Local build of that package with this checkout's component, API key, fallback-AP password, and time zone |
 | [`components/petkit_feeder/`](components/petkit_feeder/) | UART framing, CRC, status parsing, and feeder actions |
 | [`secrets.yaml.example`](secrets.yaml.example) | Template for the private Wi-Fi, API, recovery, and time-zone settings of a local build |
 | [`tests/`](tests/) | Host-side protocol and firmware checks |

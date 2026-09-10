@@ -8,6 +8,14 @@ substitutions:
 packages:
   feeder: !include petkit-feeder.yaml
 
+# Build the feeder component from this checkout instead of the published
+# revision the package points at; the entry added last takes precedence.
+external_components:
+  - source:
+      type: local
+      path: components
+    components: [petkit_feeder]
+
 api:
   encryption:
     key: !secret api_key
