@@ -1493,20 +1493,19 @@ def main() -> None:
     if not confirm_final_install():
         print(
             "\nFinished after successfully installing Kickstarter.\n\n"
-            "ESPHome Device Builder needs the bridge's API encryption key as the "
-            "'api_key' secret before it can take control of the device:\n"
-            f"  {values['api_key']}\n\n"
+            "Device Builder creates a new API encryption key for the feeder when "
+            "it takes control; Home Assistant picks that key up on its own.\n\n"
             "In case you have trouble installing final image via ESPHome Device "
             "Builder, you can still install the feeder firmware manually:\n"
             f"  cd {project}\n"
-            f"  .venv/bin/esphome run esphome/petkit-feeder.yaml "
+            f"  .venv/bin/esphome run esphome/petkit-feeder-local.yaml "
             f"--device {kickstart_host}\n"
         )
         return
 
     for step, command in (
-        ("Building", ["compile", "petkit-feeder.yaml"]),
-        ("Installing", ["upload", "petkit-feeder.yaml", "--device", kickstart_host]),
+        ("Building", ["compile", "petkit-feeder-local.yaml"]),
+        ("Installing", ["upload", "petkit-feeder-local.yaml", "--device", kickstart_host]),
     ):
         print(f"  • {step} the final feeder firmware...")
         run(
