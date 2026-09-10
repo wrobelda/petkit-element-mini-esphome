@@ -224,7 +224,7 @@ The encrypted-API build uses 48.2% flash and 46.9% RAM on the 2 MiB module.
 
 Wireless installation uses Kickstart for the **non-OS V2 to eboot V1** layout
 transition; see [KICKSTART.md](KICKSTART.md) for the internal steps. After the
-final image boots, subsequent updates use ordinary ESPHome OTA.
+final image boots, subsequent updates use ESPHome OTA.
 
 Serial flashing is also a direct installation and recovery option. Before
 connecting an adapter, read the [Fresh Element Mini hardware page][mini-hardware]

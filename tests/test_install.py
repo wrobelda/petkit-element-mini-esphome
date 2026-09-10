@@ -656,19 +656,6 @@ class OrchestrationResultTest(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 install.run_provisioner([], cwd=Path("."), env={})
 
-    def test_only_transport_loss_makes_migration_result_ambiguous(self) -> None:
-        self.assertTrue(
-            install.migration_result_is_ambiguous(
-                subprocess.CalledProcessError(56, ["curl"])
-            )
-        )
-        self.assertFalse(
-            install.migration_result_is_ambiguous(
-                subprocess.CalledProcessError(22, ["curl"])
-            )
-        )
-
-
 class EntrypointTest(unittest.TestCase):
     def test_expected_timeout_exits_without_reraising(self) -> None:
         with (
@@ -760,6 +747,11 @@ class MainResumeTest(unittest.TestCase):
                 return_value=self.SECRETS,
             ),
             mock.patch.object(install, "require_build_artifact"),
+            mock.patch.object(
+                install, "fetch_authenticated_json", return_value={"current_slot": 2}
+            ),
+            mock.patch.object(install, "wait_for_conversion"),
+            mock.patch.object(install, "confirm_final_install", return_value=True),
             mock.patch.object(sys, "argv", ["install.py"]),
         )
 
@@ -1128,6 +1120,173 @@ class MainResumeTest(unittest.TestCase):
             self.assertNotIn("stdout", popen.call_args.kwargs)
             command = popen.call_args.args[0]
             self.assertIn("--event-log", command)
+
+    def test_kickstart_in_the_lower_slot_relocates_first(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "petkit-element-mini-esphome"
+            (project / "esphome").mkdir(parents=True)
+            kickstart = install.DetectedFirmware(
+                "petkit-kickstart.local", self.identity(install.KICKSTART_PROJECT)
+            )
+            final = install.DetectedFirmware(
+                "petkit-feeder.local", self.identity(install.FINAL_PROJECT)
+            )
+
+            def download(path: Path, **_kwargs: object) -> None:
+                path.write_bytes(b"R" * 0x200000)
+
+            patches = self.common_patches(project)
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "detect_running_firmware", return_value=kickstart
+                    )
+                )
+                stack.enter_context(
+                    mock.patch.object(install, "wait_for_firmware", return_value=final)
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "download_recovery", side_effect=download
+                    )
+                )
+                upload = stack.enter_context(
+                    mock.patch.object(install, "run_authenticated_curl")
+                )
+                stack.enter_context(mock.patch.object(install, "run_provisioner"))
+                stack.enter_context(
+                    mock.patch.object(
+                        install,
+                        "fetch_authenticated_json",
+                        return_value={"current_slot": 1},
+                    )
+                )
+                wait_slot = stack.enter_context(
+                    mock.patch.object(install, "wait_for_slot")
+                )
+                stack.enter_context(
+                    mock.patch.object(install, "wait_for_conversion")
+                )
+                install.main()
+
+            wait_slot.assert_called_once()
+            # Relocate, then convert.
+            self.assertEqual(upload.call_count, 2)
+
+    def test_declining_the_final_install_stops_after_conversion(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            project = Path(directory) / "petkit-element-mini-esphome"
+            (project / "esphome").mkdir(parents=True)
+            kickstart = install.DetectedFirmware(
+                "petkit-kickstart.local", self.identity(install.KICKSTART_PROJECT)
+            )
+
+            def download(path: Path, **_kwargs: object) -> None:
+                path.write_bytes(b"R" * 0x200000)
+
+            patches = self.common_patches(project)
+            with contextlib.ExitStack() as stack:
+                for patch in patches:
+                    stack.enter_context(patch)
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "detect_running_firmware", return_value=kickstart
+                    )
+                )
+                wait = stack.enter_context(
+                    mock.patch.object(install, "wait_for_firmware")
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "download_recovery", side_effect=download
+                    )
+                )
+                upload = stack.enter_context(
+                    mock.patch.object(install, "run_authenticated_curl")
+                )
+                stack.enter_context(
+                    mock.patch.object(
+                        install, "confirm_final_install", return_value=False
+                    )
+                )
+                install.main()
+
+            # Only the convert POST; the final firmware is not installed.
+            self.assertEqual(upload.call_count, 1)
+            wait.assert_not_called()
+
+
+class ConfirmFinalInstallTest(unittest.TestCase):
+    def test_accepts_an_affirmative_answer(self) -> None:
+        with (
+            mock.patch.object(install, "prompt", return_value="Yes"),
+            mock.patch("builtins.print"),
+        ):
+            self.assertTrue(install.confirm_final_install())
+
+    def test_declines_the_default(self) -> None:
+        with (
+            mock.patch.object(install, "prompt", return_value="no"),
+            mock.patch("builtins.print"),
+        ):
+            self.assertFalse(install.confirm_final_install())
+
+
+class WaitForSlotTest(unittest.TestCase):
+    def test_returns_when_the_slot_is_reached(self) -> None:
+        with (
+            mock.patch.object(
+                install,
+                "fetch_authenticated_json",
+                side_effect=[{"current_slot": 1}, {"current_slot": 2}],
+            ),
+            mock.patch.object(install.time, "sleep"),
+        ):
+            install.wait_for_slot("host", 2, username="u", password="p", cwd=Path("."))
+
+    def test_times_out(self) -> None:
+        with self.assertRaises(install.InstallationTimeout):
+            install.wait_for_slot(
+                "host", 2, username="u", password="p", cwd=Path("."), timeout=0
+            )
+
+
+class WaitForConversionTest(unittest.TestCase):
+    def _run(self, side_effect: object) -> None:
+        with (
+            mock.patch.object(
+                install, "fetch_authenticated_json", side_effect=side_effect
+            ),
+            mock.patch.object(install.time, "sleep"),
+        ):
+            install.wait_for_conversion("host", username="u", password="p", cwd=Path("."))
+
+    def test_success(self) -> None:
+        self._run([{"result": "success"}])
+
+    def test_already_converted(self) -> None:
+        self._run([{"result": "already_converted"}])
+
+    def test_terminal_failure_stops(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "failed conversion"):
+            self._run([{"result": "flash_write_failed"}])
+
+    def test_connection_error_then_success(self) -> None:
+        self._run(
+            [
+                subprocess.CalledProcessError(7, ["curl"]),
+                {"result": "already_converted"},
+            ]
+        )
+
+    def test_times_out_while_in_progress(self) -> None:
+        with self.assertRaises(install.InstallationTimeout):
+            install.wait_for_conversion(
+                "host", username="u", password="p", cwd=Path("."), timeout=0
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

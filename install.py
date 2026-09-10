@@ -26,7 +26,7 @@ REPOSITORIES = {
 }
 REPOSITORY_REVISIONS = {
     "petkit-compat-server": "91bf4d57e1dceecc48eccde936d1532e3fd5e972",
-    "esphome-kickstart": "2edf44146b259712228b01146ca3880e04cf89b7",
+    "esphome-kickstart": "e3e0961fe323030263b50f83be7f055a1f4f1e15",
 }
 ALLOWED_REPOSITORY_ORIGINS = {
     "petkit-compat-server": {"wrobelda/petkit-compat-server"},
@@ -53,7 +53,6 @@ INSTALL_STATE = Path("local-cache/install-state.json")
 KICKSTART_PROJECT = "petkit.fresh-element-mini-kickstart"
 FINAL_PROJECT = "petkit.fresh-element-mini"
 PROVISION_COMMIT_OUTCOME_UNKNOWN_EXIT = 3
-AMBIGUOUS_MIGRATION_CURL_EXIT_CODES = {18, 28, 52, 55, 56}
 PETKIT_SOFTAP_PREFIX = "PETKIT"
 
 
@@ -173,6 +172,144 @@ def download_recovery(
         raise
 
 
+def fetch_authenticated_json(
+    url: str,
+    *,
+    username: str,
+    password: str,
+    cwd: Path,
+    debug: bool = False,
+) -> dict[str, object]:
+    def quote(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    command = ["curl", "--config", "-", "--digest", "--fail-with-body", url]
+    if debug:
+        print(f"\n+ {' '.join(command[3:])}")
+    result = subprocess.run(
+        command,
+        cwd=cwd,
+        input=f'user = "{quote(username)}:{quote(password)}"\n',
+        text=True,
+        check=False,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        report_process_failure(result)
+        raise subprocess.CalledProcessError(
+            result.returncode, command, output=result.stdout, stderr=result.stderr
+        )
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"expected JSON from {url}") from error
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"expected a JSON object from {url}")
+    return parsed
+
+
+def post_authenticated(
+    url: str,
+    *,
+    username: str,
+    password: str,
+    cwd: Path,
+    debug: bool = False,
+) -> None:
+    run_authenticated_curl(
+        ["--request", "POST", url],
+        username=username,
+        password=password,
+        cwd=cwd,
+        debug=debug,
+    )
+
+
+def wait_for_slot(
+    hosts: list[str],
+    expected_slot: int,
+    *,
+    username: str,
+    password: str,
+    cwd: Path,
+    timeout: int = 300,
+    debug: bool = False,
+) -> None:
+    """Wait until /hub/slot_status reports *expected_slot* is active.
+
+    The slot routes report the active slot 1-based and 1 is the lower slot, so
+    relocation from the lower slot completes when this reports 2. Relocation
+    reboots the bridge, so try each host until one answers.
+    """
+    if isinstance(hosts, str):
+        hosts = [hosts]
+    deadline = time.monotonic() + timeout
+    next_progress = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        for host in hosts:
+            try:
+                status = fetch_authenticated_json(
+                    f"http://{host}/hub/slot_status",
+                    username=username,
+                    password=password,
+                    cwd=cwd,
+                    debug=debug,
+                )
+            except (subprocess.CalledProcessError, RuntimeError):
+                continue
+            if status is not None and status.get("current_slot") == expected_slot:
+                return
+        now = time.monotonic()
+        if now >= next_progress:
+            print(f"  … Still waiting for the bridge to reach slot {expected_slot}...")
+            next_progress = now + 10
+        time.sleep(2)
+    raise InstallationTimeout(f"the bridge did not reach slot {expected_slot}")
+
+
+def wait_for_conversion(
+    host: str,
+    *,
+    username: str,
+    password: str,
+    cwd: Path,
+    timeout: int = 300,
+    debug: bool = False,
+) -> None:
+    deadline = time.monotonic() + timeout
+    next_progress = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            status = fetch_authenticated_json(
+                f"http://{host}/hub/convert",
+                username=username,
+                password=password,
+                cwd=cwd,
+                debug=debug,
+            )
+        except (subprocess.CalledProcessError, RuntimeError):
+            status = None
+        if status is not None:
+            result = str(status.get("result", ""))
+            # already_converted is the layout-is-eboot signal on every boot
+            # after the first; success is the conversion boot itself.
+            if result in ("success", "already_converted"):
+                return
+            # Everything except a still-running conversion is terminal.
+            if result not in ("idle", "in_progress", ""):
+                raise RuntimeError(
+                    f"the bridge reported a failed conversion: {result}. "
+                    "The recovery image and POST /hub/boot_other are the way "
+                    "back to the stock firmware."
+                )
+        now = time.monotonic()
+        if now >= next_progress:
+            print("  … Still waiting for the bridge to finish preparing...")
+            next_progress = now + 10
+        time.sleep(2)
+    raise InstallationTimeout("the bridge did not report a successful conversion")
+
+
 def prompt(label: str, default: str | None = None, *, secret: bool = False) -> str:
     suffix = f" [{default}]" if default else ""
     reader = getpass.getpass if secret else input
@@ -182,6 +319,19 @@ def prompt(label: str, default: str | None = None, *, secret: bool = False) -> s
             return value
         if default is not None:
             return default
+
+
+def confirm_final_install() -> bool:
+    print(
+        "\n✅ Kickstarter is installed.\n\n"
+        "The recommended next step is to take control of the device in ESPHome "
+        "Device Builder: it lists the bridge under Discovered, compiles the "
+        "feeder configuration there, and installs it over the network.\n"
+    )
+    return prompt(
+        "    Compile and install the feeder firmware from this installer instead",
+        "no",
+    ).strip().lower() in ("y", "yes")
 
 
 def yaml_string(value: str) -> str:
@@ -651,10 +801,6 @@ def run_provisioner(
     )
 
 
-def migration_result_is_ambiguous(error: subprocess.CalledProcessError) -> bool:
-    return error.returncode in AMBIGUOUS_MIGRATION_CURL_EXIT_CODES
-
-
 def require_build_artifact(path: Path, description: str) -> None:
     if not path.is_file() or path.stat().st_size == 0:
         raise RuntimeError(f"{description} was not created at {path}")
@@ -809,7 +955,9 @@ def main() -> None:
         "The installation has two phases:\n"
         "  1. Install Kickstart, a temporary bridge that can start from Petkit's "
         "stock firmware layout.\n"
-        "  2. Use Kickstart to install the final ESPHome feeder firmware.\n"
+        "  2. Prepare the feeder for the final ESPHome firmware, then install "
+        "it here or use Take Control in ESPHome Device Builder to build it "
+        "there.\n"
     )
     print("📦 Preparing installation")
     print("  • Checking supporting projects...")
@@ -880,13 +1028,6 @@ def main() -> None:
         env=build_env,
         debug=args.debug,
     )
-    print("  • Building the final feeder firmware...")
-    run(
-        [str(esphome), "compile", "petkit-feeder.yaml"],
-        cwd=project / "esphome",
-        env=build_env,
-        debug=args.debug,
-    )
 
     release = project / "local-cache" / "release"
     release.mkdir(parents=True, exist_ok=True)
@@ -895,12 +1036,7 @@ def main() -> None:
         project
         / "esphome/.esphome/build/petkit-kickstart/.pioenvs/petkit-kickstart/firmware.elf"
     )
-    factory = (
-        project
-        / "esphome/.esphome/build/petkit-feeder/.pioenvs/petkit-feeder/firmware.factory.bin"
-    )
     require_build_artifact(transition_elf, "Kickstart ELF")
-    require_build_artifact(factory, "final ESPHome factory image")
     print("  • Packaging the stock-compatible Kickstart image...")
     run(
         [
@@ -1149,9 +1285,9 @@ def main() -> None:
         f"{detected.identity.mac_address}."
     )
 
-    print("\n🔹 Phase 2 of 2 — Install the final ESPHome feeder firmware")
+    print("\n🔹 Phase 2 of 2 — Prepare the feeder for the final ESPHome firmware")
     recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
-    print("  • Saving the 2 MiB recovery image...")
+    print("  • Saving the 2 MiB recovery image and slot status...")
     download_recovery(
         recovery,
         url=f"http://{kickstart_host}/hub/flash_read",
@@ -1163,56 +1299,99 @@ def main() -> None:
     if recovery.stat().st_size != 0x200000:
         raise RuntimeError("Kickstart recovery download is not 2 MiB")
 
-    migration_error: subprocess.CalledProcessError | None = None
-    print("  • Installing the final feeder firmware...")
-    try:
-        run_authenticated_curl(
-            [
-                "--form",
-                f"firmware=@{factory}",
-                f"http://{kickstart_host}/hub/migrate?confirm=replace-vendor-bootloader",
-            ],
+    slot_status = fetch_authenticated_json(
+        f"http://{kickstart_host}/hub/slot_status",
+        username=values["kickstart_web_username"],
+        password=values["kickstart_web_password"],
+        cwd=project,
+        debug=args.debug,
+    )
+    status_path = recovery.with_name(f"{recovery.stem}-slot-status.json")
+    status_path.write_text(json.dumps(slot_status, indent=2) + "\n", encoding="utf-8")
+    status_path.chmod(0o600)
+    print(f"  ✓ Saved the recovery image and slot status ({status_path.name}).")
+
+    if slot_status.get("current_slot") == 1:
+        print("  • Relocating Kickstart to the upper slot...")
+        post_authenticated(
+            f"http://{kickstart_host}/hub/copy_lower_to_upper_slot"
+            "?confirm=copy-lower-to-upper-slot",
             username=values["kickstart_web_username"],
             password=values["kickstart_web_password"],
             cwd=project,
             debug=args.debug,
         )
-    except subprocess.CalledProcessError as error:
-        if not migration_result_is_ambiguous(error):
-            raise
-        migration_error = error
-        print(
-            "  The migration response was lost or rejected. The installer will "
-            "identify the firmware now running before deciding the outcome."
+        wait_for_slot(
+            [kickstart_host, args.kickstart_host],
+            2,
+            username=values["kickstart_web_username"],
+            password=values["kickstart_web_password"],
+            cwd=project,
+            debug=args.debug,
         )
 
-    print("  • Waiting for the authenticated final ESPHome firmware...")
-    try:
-        final = wait_for_firmware(
-            python,
-            project,
-            [args.final_host, kickstart_host],
-            values["api_key"],
-            FINAL_PROJECT,
-            expected_mac,
-            progress_label="the final ESPHome feeder firmware",
+    print("  • Preparing the feeder for the final ESPHome firmware...")
+    post_authenticated(
+        f"http://{kickstart_host}/hub/convert?confirm=convert-v2-to-eboot",
+        username=values["kickstart_web_username"],
+        password=values["kickstart_web_password"],
+        cwd=project,
+        debug=args.debug,
+    )
+    wait_for_conversion(
+        kickstart_host,
+        username=values["kickstart_web_username"],
+        password=values["kickstart_web_password"],
+        cwd=project,
+        debug=args.debug,
+    )
+
+    if not confirm_final_install():
+        print(
+            "\nFinished after successfully installing Kickstarter.\n\n"
+            "In case you have trouble installing final image via ESPHome Device "
+            "Builder, you can still install the feeder firmware manually:\n"
+            f"  cd {project}\n"
+            f"  .venv/bin/esphome run esphome/petkit-feeder.yaml "
+            f"--device {kickstart_host}\n"
         )
-    except InstallationTimeout as error:
-        if migration_error is not None:
-            raise InstallationTimeout(
-                "the migration response was indeterminate and the final firmware "
-                "could not be verified; rerun the installer to reconcile the "
-                "current firmware before another upload"
-            ) from error
-        raise
+        return
+
+    print("  • Building the final feeder firmware...")
+    run(
+        [str(esphome), "compile", "petkit-feeder.yaml"],
+        cwd=project / "esphome",
+        env=build_env,
+        debug=args.debug,
+    )
+
+    print("  • Installing the final feeder firmware...")
+    run(
+        [str(esphome), "upload", "petkit-feeder.yaml", "--device", kickstart_host],
+        cwd=project / "esphome",
+        env=build_env,
+        debug=args.debug,
+    )
+
+    print("  • Waiting for the authenticated final ESPHome firmware...")
+    final = wait_for_firmware(
+        python,
+        project,
+        [args.final_host, kickstart_host],
+        values["api_key"],
+        FINAL_PROJECT,
+        expected_mac,
+        progress_label="the final ESPHome feeder firmware",
+    )
 
     save_expected_mac(state_path, final.identity.mac_address)
     print(
         "\n✅ Installation complete.\n"
         f"Final ESPHome firmware {final.identity.project_name} is authenticated "
         f"at {final.host} on feeder {final.identity.mac_address}.\n\n"
-        "⚠️  Keep this recovery image:\n"
+        "⚠️  Keep the recovery image and slot status:\n"
         f"{recovery}\n"
+        f"{status_path}\n"
     )
 
 

@@ -4,18 +4,21 @@ Petkit Kickstart is temporary firmware that lets the Fresh Element Mini move
 from its stock firmware to ESPHome over Wi-Fi. It runs on the feeder's own
 ESP8266; the separate ISD91230 motor controller keeps its existing firmware.
 
-The migration needs two steps because the stock OTA updater and ESPHome use
-different image formats and flash layouts:
+The stock OTA updater and ESPHome use different image formats and flash
+layouts. Kickstart bridges the two before the final feeder firmware is installed:
 
 ```text
 Petkit stock firmware
     │  Stock OTA installs an Espressif non-OS SDK V2 application
     ▼
 Petkit Kickstart
-    │  Kickstart installs an ESPHome factory image and replaces the bootloader
+    │  Save a backup, then convert Kickstart to the eboot layout
+    ▼
+Petkit Kickstart under eboot
+    │  Ordinary ESPHome OTA installs the final feeder firmware
     ▼
 Petkit ESPHome firmware
-       Future updates use ordinary ESPHome OTA
+       Future updates use ESPHome OTA
 ```
 
 For installation commands, follow the [user procedure](../README.md). This
@@ -47,8 +50,9 @@ set of device configuration and calibration data.
 
 An **ESPHome factory image** establishes a different layout, starting at flash
 address zero, and uses the eboot V1 layout. The stock updater cannot install
-that image directly. Kickstart solves this by booting as a V2 application first,
-then providing a separate installer for the factory image.
+that image directly. Kickstart boots as a V2 application first, then rebuilds
+its own application in the eboot format and replaces the bootloader. The final
+feeder firmware is installed afterward through ordinary ESPHome OTA.
 
 ## What happens during migration
 
@@ -62,62 +66,70 @@ The server must offer an image built for the validated hardware profile. The
 stock OTA client chooses the physical destination; the server must not infer
 the active slot from a firmware version such as `1.406` or `2207006`.
 
-### 2. Kickstart moves to the upper slot if necessary
+### 2. Save the recovery image before changing either slot
 
-The final installation replaces the lower flash layout. Kickstart therefore
-needs to run from `user2` before performing that installation, so it does not
-overwrite the application it is executing.
+The Petkit profile leaves automatic relocation and conversion disabled. Once
+Kickstart is reachable, the installer downloads its full 2 MiB flash image and
+saves the slot status alongside it. At this point the image contains:
 
-Kickstart asks the ESP8266 SDK which slot is running. The
-[Petkit configuration](petkit-kickstart.yaml) enables automatic relocation:
-
-- If Kickstart starts in `user2`, no relocation is needed.
-- If Kickstart starts in `user1`, it validates its own image, copies the bridge
-  to `user2`, validates the copy, selects `user2`, and reboots.
-
-Relocation happens before ESPHome's Wi-Fi component initializes. It is a
-separate operation from installing the final factory image: after relocation,
-the stock bootloader still starts Kickstart in the stock V2 layout.
-
-**Relocation can overwrite the remaining stock application.** Immediately after
-stock OTA, the opposite slot still contains stock firmware. Once Kickstart has
-copied itself there, both slots can contain the bridge.
-
-### 3. Save the recovery image
-
-Once Kickstart is reachable, download and verify its full 2 MiB flash image
-before replacing the bootloader. The download preserves the flash contents at
-that moment, including:
-
-- The stock bootloader and the current contents of both application slots.
+- The stock bootloader, Kickstart in one slot, and the other slot's application.
 - Device identity and saved configuration, including Wi-Fi and cloud credentials.
 - RF calibration data and SDK system parameters.
 
-This is a **post-transition recovery image**, not a pristine stock backup.
-Stock OTA has already overwritten one stock application, and automatic
-relocation may have overwritten the other. Do not assume that the download
-contains a bootable stock application.
+This is a **post-Kickstart backup**, not a pristine stock dump: stock OTA has
+already replaced one application. If neither relocation nor conversion has
+run, the other slot can still contain a bootable stock application. Keep the
+original backup when retrying installation; a later download records whatever
+changes have already happened.
 
 A complete pre-installation stock backup requires reading flash through the
 ESP8266 ROM UART loader before installing Kickstart. Keep either kind of backup
 private because it can contain Petkit and Aliyun credentials.
 
-### 4. Install the ESPHome factory image
+### 3. Kickstart moves to the upper slot if necessary
 
-The authenticated `/hub/migrate` endpoint accepts the complete Petkit ESPHome
-factory image. Kickstart writes the application during upload while holding
-the new bootloader in RAM. After validating the complete image and flash
-readback, Kickstart replaces the vendor bootloader with eboot and reboots into
-the final feeder firmware.
+The final installation replaces the lower flash layout. Kickstart therefore
+needs to run from `user2` before converting, so it does not overwrite the
+application it is executing.
 
-Writing the bootloader last postpones the change in boot layout until the
-application has been written. It does not make the operation immune to power
-loss; interruption during bootloader replacement can still require UART
-recovery. The generic validation rules, write order, and power-loss limits are
-documented in the [ESPHome Kickstart non-OS V2 transition guide][transition-guide].
+Kickstart asks the ESP8266 SDK which slot is running. The installer, or the
+**Relocate to upper slot** button in the web interface, triggers relocation when
+needed:
 
-Ordinary ESPHome OTA is disabled while the bridge uses the V2 layout. After the
-factory-image migration, subsequent updates use normal ESPHome OTA.
+- If Kickstart is already in `user2`, no relocation is needed.
+- If Kickstart is in `user1`, it validates its own image, copies the bridge
+  to `user2`, validates the copy, selects `user2`, and reboots.
+
+Relocation is a separate operation from converting the bridge: after
+relocation, the stock bootloader still starts Kickstart in the stock V2 layout.
+
+**Relocation overwrites the remaining stock application.** Immediately after
+stock OTA, the opposite slot still contains stock firmware. Once Kickstart has
+copied itself there, both slots contain the bridge.
+
+### 4. Convert the bridge and install the ESPHome firmware
+
+The authenticated `/hub/convert` request records the conversion request and
+reboots Kickstart. On the next boot, before Wi-Fi starts, Kickstart rebuilds
+its own application as an eboot V1 image and replaces the vendor bootloader
+with eboot last. Writing the bootloader last postpones the
+change in boot layout until the application has been written; it does not make
+the operation immune to power loss, and interruption during bootloader
+replacement can still require UART recovery. The generic validation rules,
+write order, and power-loss limits are documented in the [ESPHome Kickstart
+non-OS V2 transition guide][transition-guide].
+
+Read `GET /hub/convert` after the reboot to confirm that Kickstart recognized
+the eboot layout. Installing the feeder firmware afterward is a separate step:
+take control of the feeder in ESPHome Device Builder, or build and upload it
+from the command line. Conversion alone does not install feeder controls.
+
+Manual installation and the current Device Builder requirements are described
+in the [user procedure](../README.md#5-preserve-recovery-data-migrate-kickstart-and-install-the-final-image).
+Subsequent updates also use ESPHome OTA. The transition component suppresses
+the configured native OTA listener during normal V2 startup; the generic
+[transition guide][transition-guide] covers the required setup and safe-mode
+constraints.
 
 ## What runs while Kickstart is active
 
@@ -130,8 +142,8 @@ bus and physical controls.
 | Interface | Purpose |
 |---|---|
 | Wi-Fi station connection | Access through the configured home network |
-| Password-protected fallback AP and captive portal | Configure Wi-Fi when the station connection is unavailable |
-| Authenticated web interface | Diagnostics and recovery; available at `192.168.4.1` in fallback-AP mode |
+| Password-protected fallback AP | Diagnostics and recovery when the station connection is unavailable; the web interface is at `192.168.4.1` |
+| Authenticated web interface | Diagnostics, migration, and recovery |
 | ESPHome native API | Network logs and Home Assistant connection |
 | UART1 / GPIO2 / board TX1 pad | Transmit-only serial logs |
 
@@ -154,7 +166,7 @@ selected through `KICKSTART_COMPONENTS_PATH`:
 
 | Component | Responsibility |
 |---|---|
-| `esp8266_nonos_v2_to_eboot_v1` | Defines the flash layout and mapped-code limits, generates the linker script, and installs the final eboot factory image |
+| `esp8266_nonos_v2_to_eboot_v1` | Defines the flash layout and mapped-code limits, generates the linker script, and converts the bridge itself to eboot |
 | `hub_api` | Provides the full-flash recovery download |
 | `esp8266_nonos_v2_slot_control` | Provides slot recovery controls and optional automatic relocation to the upper slot |
 
@@ -208,11 +220,12 @@ sequence:
    count or ordering differences from the stock image.
 2. Install through stock OTA and confirm that Kickstart boots and its recovery
    API is reachable.
-3. For a bridge initially installed in `user1`, confirm that relocation succeeds
-   and the bridge boots from `user2`.
-4. Download and verify the recovery image, then install and boot the final
-   ESPHome factory image.
-5. Confirm that a subsequent ordinary ESPHome OTA update succeeds.
+3. Download and verify the recovery image and save its slot status. For a bridge
+   initially installed in `user1`, then confirm that relocation succeeds and
+   the bridge boots from `user2`.
+4. Convert the bridge, confirm the eboot boot, and install the final ESPHome
+   firmware through ordinary OTA.
+5. Confirm that a subsequent ESPHome OTA update succeeds.
 6. Restore stock over UART and repeat with the other initial destination slot.
 
 ## Home Assistant handoff
@@ -236,9 +249,11 @@ migration components directly from
 instead of carrying private copies. For the reusable algorithm and recovery
 API details, see the [non-OS V2 transition guide][transition-guide].
 
-The bridge supports migration from the stock non-OS V2 layout to ESPHome's
-eboot V1 layout. It does not provide a reverse eboot V1-to-non-OS V2 installer;
-restoring stock requires UART access.
+Before migration changes the other slot, slot control can validate and boot
+the remaining stock application. After eboot replaces the vendor bootloader,
+the bridge has no reverse conversion path; restoring a saved vendor-layout
+image requires UART access. See [Recovery and rollback](../README.md#recovery-and-rollback)
+for the user procedure.
 
 ## Applying the bridge to another feeder
 
@@ -257,4 +272,4 @@ partition table instead of this V2 slot layout. The compatibility server must
 select a validated hardware profile rather than offer one binary to every
 product using the same OTA endpoint.
 
-[transition-guide]: https://github.com/wrobelda/esphome-kickstart/blob/master/ESP8266-NONOS-TRANSITION.md
+[transition-guide]: https://github.com/wrobelda/esphome-kickstart/blob/master/components/esp8266_nonos_v2_to_eboot_v1/README.md

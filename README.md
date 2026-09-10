@@ -13,7 +13,7 @@ supported. The ESP32-based Fresh Element Solo is a different device.
 - four schedules by default, with additional slots configurable in YAML;
 - battery-backed timekeeping during network and power outages;
 - food detection, power-source reporting, and diagnostic feedback;
-- normal ESPHome updates after the initial firmware migration.
+- over-the-air ESPHome updates after the initial firmware migration.
 
 One serving is one motor-controller wheel cycle, which Petkit describes as
 approximately 5 g. Actual weight varies with the food and hopper level.
@@ -22,27 +22,36 @@ approximately 5 g. Actual weight varies with the food and hopper level.
 
 The wireless installation starts with Petkit's stock firmware, installs a small
 ESPHome transition image, then installs the complete feeder firmware. It does
-not require opening the feeder. Both installation methods save a recovery
-backup before installing the final firmware; see [Recovery and rollback](#recovery-and-rollback)
+not require opening the feeder. Both procedures save a recovery backup before
+relocating or converting Kickstart; see [Recovery and rollback](#recovery-and-rollback)
 if you need to restore it.
+
+**Development status:** the guided installer and the manual procedure below use
+a Kickstart checkout containing the self-converting interface. The transition
+profile also needs the safe-mode protection described in the
+[Kickstart component guide][transition-component].
 
 ### Guided installation
 
-The guided installer handles the complete migration:
+The guided installer handles the migration up to the final ESPHome firmware:
 
 1. Download the supporting projects and prepare the build environment.
-2. Ask for Wi-Fi and recovery credentials, then build Kickstart and the final
-   feeder firmware.
-3. Run the local Petkit API and provision the feeder to download Kickstart.
-4. Save a recovery image and install the final firmware.
-5. Authenticate to the ESPHome API and confirm that the final feeder firmware
-   is running on the same physical device.
+2. Ask for Wi-Fi and recovery credentials, then build the temporary bridge
+   firmware.
+3. Run the local Petkit API and provision the feeder to download the bridge.
+4. Save a recovery image and slot status, then prepare the feeder for the final
+   ESPHome firmware.
+5. Recommend taking control of the feeder in ESPHome Device Builder, or, if
+   you prefer, build and install the final firmware from the installer and
+   confirm that it is running on the same physical device.
 
 The installer pauses when you need to put the feeder in setup mode or reconnect
-the computer to your regular 2.4 GHz Wi-Fi network. If the process is interrupted
-after Kickstart or the final firmware boots, run the same command again. The
-installer identifies the running firmware and continues from that phase without
-repeating stock provisioning or a completed migration.
+the computer to your regular 2.4 GHz Wi-Fi network. After preparing the feeder,
+it recommends taking control of it in ESPHome Device Builder and only builds and
+installs the final firmware if you ask it to. If the process is interrupted after the bridge
+or the final firmware boots, run the same command again. The installer
+identifies the running firmware and continues from that phase without repeating
+stock provisioning or a completed migration.
 
 ```sh
 git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
@@ -67,8 +76,11 @@ git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
 git clone https://github.com/wrobelda/petkit-compat-server.git
 git clone https://github.com/wrobelda/esphome-kickstart.git
 git -C petkit-compat-server checkout --detach 91bf4d57e1dceecc48eccde936d1532e3fd5e972
-git -C esphome-kickstart checkout --detach 2edf44146b259712228b01146ca3880e04cf89b7
 ```
+
+Select a Kickstart revision containing the self-conversion interface before
+building. The older `2edf441` revision used by the guided installer does not
+support this procedure; do not mix its upload interface with these commands.
 
 #### 2. Configure and build both ESPHome images
 
@@ -178,18 +190,16 @@ unset ESPHOME_WIFI_PASSWORD
 
 Reconnect the computer to the regular 2.4 GHz Wi-Fi network. The server terminal
 should show the feeder's startup requests, OTA download, and successful
-completion. The transition image relocates itself to the safe upper slot
-automatically when Petkit's stock ESP8266 OTA client initially installs it in
-the lower slot.
+completion. The transition image is installed in whichever slot Petkit's stock
+ESP8266 OTA client chose; step 5 relocates it to the upper slot if needed.
 
-#### 5. Preserve recovery data and install the final image
+#### 5. Preserve recovery data, migrate Kickstart, and install the final image
 
 Find the Petkit Kickstart address in Home Assistant or the router's client list.
-Download and keep its 2 MiB recovery image before installing the final firmware.
+Download and keep its 2 MiB recovery image and its slot status before migrating.
 
 Set the address and the web username from `secrets.yaml`; `curl` prompts for the
-web password. Return to the `petkit-element-mini-esphome` checkout first, so the
-firmware path below resolves correctly:
+web password. Return to the `petkit-element-mini-esphome` checkout first:
 
 ```sh
 cd ../petkit-element-mini-esphome
@@ -199,16 +209,68 @@ curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
   --output petkit-post-kickstart.bin \
   "http://$KICKSTART_IP/hub/flash_read"
 test "$(wc -c < petkit-post-kickstart.bin | tr -d ' ')" -eq 2097152
-
 curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
-  --form firmware=@esphome/.esphome/build/petkit-feeder/.pioenvs/petkit-feeder/firmware.factory.bin \
-  "http://$KICKSTART_IP/hub/migrate?confirm=replace-vendor-bootloader"
+  --output petkit-post-kickstart-slot-status.json \
+  "http://$KICKSTART_IP/hub/slot_status"
 ```
 
-Kickstart writes the application, validates the complete factory image and
-flash readback, then writes the new bootloader and reboots. Home Assistant should
-reuse the Kickstart device entry and rename it to Petkit Feeder. Future updates
-use normal ESPHome OTA.
+If the slot status reports `"current_slot": 1`, Kickstart is in the lower slot;
+relocate it to the upper slot first, then wait for it to return:
+
+```sh
+curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
+  --request POST \
+  "http://$KICKSTART_IP/hub/copy_lower_to_upper_slot?confirm=copy-lower-to-upper-slot"
+```
+
+The copy reboots the bridge. Once it returns, confirm that the status reports
+`"current_slot": 2` before converting. Display the new status in the terminal
+rather than overwriting the status saved with the backup:
+
+```sh
+curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
+  "http://$KICKSTART_IP/hub/slot_status"
+```
+
+Convert the bridge to the eboot V1 layout:
+
+```sh
+curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
+  --request POST \
+  "http://$KICKSTART_IP/hub/convert?confirm=convert-v2-to-eboot"
+```
+
+The request schedules a reboot. Kickstart then converts its own application,
+replaces the bootloader, and reboots again. After it returns, check the result:
+
+```sh
+curl --digest --user "$KICKSTART_WEB_USERNAME" --fail-with-body \
+  "http://$KICKSTART_IP/hub/convert"
+```
+
+Proceed when `result` reports `already_converted`, meaning Kickstart recognized
+the eboot layout on this boot. If conversion failed, retain the reported result
+and resolve the failure before retrying.
+
+Build the final firmware, then install it from the project directory:
+
+```sh
+.venv/bin/esphome compile esphome/petkit-feeder.yaml
+.venv/bin/esphome upload esphome/petkit-feeder.yaml --device "$KICKSTART_IP"
+```
+
+**Take Control in ESPHome Device Builder:** Kickstart advertises the feeder
+configuration, so Device Builder can discover it before or after conversion.
+Take Control only creates a configuration; it does not migrate Kickstart or
+install firmware.
+The current feeder YAML uses a local `components/` directory, so it is not yet
+a self-contained remote package. Use the command above for this checkout.
+Installing through Device Builder requires an import-ready package or a local
+copy of the feeder component, together with the YAML's secrets, including the
+same `api_key` used by Kickstart.
+
+Home Assistant should reuse the Kickstart device entry and rename it to Petkit
+Feeder. Future updates use ESPHome OTA.
 
 The image format, slot behavior, validation, and recovery controls are
 explained in the [Kickstart transition guide](esphome/KICKSTART.md).
@@ -219,12 +281,17 @@ If installation stops partway through, first rerun `python3 install.py`. The
 guided installer can continue when Kickstart or the final firmware is already
 running, including after a manual installation with the same `secrets.yaml`.
 
-Both installation methods download a complete 2 MiB flash backup before
-installing the final firmware. Keep your feeder's backup somewhere safe and
-private because it contains device and Wi-Fi credentials:
+Both procedures download a complete 2 MiB flash backup and save the slot status
+before requesting migration. Keep the first backup and its status file somewhere
+safe and private because the image contains device and Wi-Fi credentials.
+A backup downloaded after an interrupted migration may contain fewer recovery
+options than the original:
 
 - **Guided installation:** `local-cache/release/petkit-post-kickstart-<timestamp>.bin`.
 - **Manual installation:** `petkit-post-kickstart.bin` in the project directory.
+
+The status file has the same filename stem followed by `-slot-status.json`.
+Do not overwrite either file when checking the device after relocation.
 
 If the feeder no longer boots, restoring this backup requires opening the
 feeder and connecting a 3.3 V USB-to-serial adapter. A power failure during the
@@ -249,11 +316,18 @@ final bootloader write is one situation that can require this procedure.
    feeder off and on again without holding the button. The feeder returns to
    Kickstart; run `python3 install.py` to retry installation.
 
-**Returning to Petkit's stock firmware requires a separate backup taken before
-installation.** The installation backup preserves the device's settings and
-identity, but Kickstart may already have replaced both stock application
-slots. If you want the option of restoring the exact original firmware, take a
-full serial backup before starting either installation method.
+**Returning to stock depends on when the backup was taken.** Before relocation
+or conversion, the other slot can still contain a valid stock application.
+The authenticated **Switch to other slot** control can boot that application
+while the vendor bootloader remains in place. After restoring a backup from
+that stage over UART, the same control can select the saved stock application.
+Image validity alone does not identify a slot as stock; retain the original
+slot status and installation history.
+
+A backup taken after relocation may contain Kickstart in both slots. It can
+restore the bridge but cannot recover an overwritten stock application. To
+preserve the exact original flash contents, take a full serial backup before
+starting either installation method.
 
 ### In case you lost your backup
 
@@ -281,3 +355,4 @@ cd esphome/tests
 Open work and hardware checks are tracked in [TODO.md](TODO.md).
 
 [nonos-hardware]: https://github.com/wrobelda/petkit-compat-server/blob/main/devices/esp8266/nonos_v2/HARDWARE.md
+[transition-component]: https://github.com/wrobelda/esphome-kickstart/blob/master/components/esp8266_nonos_v2_to_eboot_v1/README.md#ordinary-ota-and-device-builder

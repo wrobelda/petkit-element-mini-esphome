@@ -15,9 +15,20 @@ esphome:
     name: petkit.fresh-element-mini-kickstart
     version: "0.1"
 
+# Advertise the final feeder configuration so ESPHome Device Builder can
+# discover this bridge, take control of it, and install the feeder firmware
+# over the network once the bridge has converted to the eboot layout.
+dashboard_import:
+  package_import_url: github://wrobelda/petkit-element-mini-esphome/esphome/petkit-feeder.yaml@master
+
 esp8266:
   board: esp_wroom_02
   restore_from_flash: false
+
+# Safe mode starts the native OTA listener before the transition component can
+# gate it, so the vendor layout would be exposed to a normal ESPHome upload.
+safe_mode:
+  disabled: true
 
 # Keep normal diagnostics off UART0 because GPIO1/GPIO3 connect to the feeder's
 # motor-controller bus. ESP8266 UART1 is transmit-only on GPIO2.
@@ -43,9 +54,6 @@ wifi:
     ssid: "Petkit Kickstart"
     password: !secret fallback_ap_password
 
-# The captive portal stores the selected station credentials in flash.
-captive_portal:
-
 web_server:
   port: 80
   local: true
@@ -60,7 +68,15 @@ api:
   encryption:
     key: !secret api_key
 
+# The OTA listener is suppressed while the V2 layout is active (ota_id below)
+# and starts normally once the bridge has converted to eboot.
+ota:
+  - platform: esphome
+    id: native_ota
+    encryption:
+
 esp8266_nonos_v2_to_eboot_v1:
+  id: migration
   # Link the bridge for the flash mapping expected by the stock bootloader.
   irom_vma: 0x40201010
   irom_size: 0x0FEFF0
@@ -71,18 +87,38 @@ esp8266_nonos_v2_to_eboot_v1:
     - offset: 0x101000
       # Stop before the PHY-data sector at 0x1FB000.
       size: 0x0FA000
+  # Reference the `ota: platform: esphome` instance above by id. While the V2
+  # layout is active the bridge calls mark_failed() on that component before
+  # its setup, so its listener never binds; after the conversion reboot the
+  # component is rebuilt and the listener starts normally.
+  ota_id: native_ota
 
 hub_api:
 
 esp8266_nonos_v2_slot_control:
-  # A lower-slot bridge cannot safely replace the lower flash layout while it
-  # is executing there, so validate and copy it to the upper slot at boot.
-  auto_copy_lower_to_upper_slot: true
+  id: slot_control
+  # The installer or the Web UI performs relocation and conversion explicitly.
+  auto_copy_lower_to_upper_slot: false
 
 button:
   - platform: restart
     name: Restart
     entity_category: diagnostic
+  - platform: template
+    name: "Convert bridge to eboot layout"
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(migration)->request_conversion();
+  - platform: template
+    name: "Switch to other slot"
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(slot_control)->request_boot_other();
+  - platform: template
+    name: "Relocate to upper slot"
+    entity_category: diagnostic
+    on_press:
+      - lambda: id(slot_control)->request_copy_lower_to_upper();
 
 debug:
   update_interval: 10s
@@ -106,3 +142,24 @@ text_sensor:
   - platform: wifi_info
     ip_address:
       name: IP address
+  - platform: template
+    name: "Active slot state"
+    entity_category: diagnostic
+    update_interval: 5min
+    lambda: |-
+      char buf[96];
+      snprintf(buf, sizeof(buf), "slot %u (%s), entry 0x%08X",
+               id(slot_control)->active_slot_number(),
+               id(slot_control)->active_slot_valid() ? "valid" : "invalid",
+               id(slot_control)->active_slot_entry());
+      return { buf };
+  - platform: template
+    name: "Inactive slot state"
+    entity_category: diagnostic
+    update_interval: 5min
+    lambda: |-
+      char buf[96];
+      snprintf(buf, sizeof(buf), "%s, entry 0x%08X",
+               id(slot_control)->inactive_slot_valid() ? "valid" : "invalid",
+               id(slot_control)->inactive_slot_entry());
+      return { buf };
