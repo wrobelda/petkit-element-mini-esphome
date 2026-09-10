@@ -237,16 +237,18 @@ the migration even when the key or the node name changes:
 - The local build in `petkit-feeder-local.yaml` reuses the bridge's key from
   this checkout's `secrets.yaml`, so the installer can authenticate the final
   firmware immediately with the credentials it already holds.
-- A configuration adopted in Device Builder must carry the bridge's key as
-  well: the package's OTA platform inherits the API key, and the bridge only
-  accepts an upload authenticated with its own. Device Builder cannot learn
-  that key on its own, so the user pastes it into the adopted YAML, where
-  per-device keys live. Should the feeder ever run with a different key,
-  Home Assistant's re-authentication tries the keys it can find, including
-  the one held by the dashboard, and repairs its stored key without asking.
+- Device Builder generates a key when it takes control of the bridge and
+  writes it into the new configuration. After the install, Home Assistant's
+  re-authentication tries the keys it can find, including the one held by the
+  dashboard, and repairs its stored key without asking.
 
-The final image must keep the API encrypted; configuration validation rejects
-an adopting YAML that provides no key.
+Firmware updates are a separate credential. The bridge's OTA is
+unauthenticated, because Device Builder installs the feeder with the OTA
+settings of the configuration it uploads and ESPHome refuses a plaintext
+upload when that configuration carries an OTA encryption key; the bridge
+lives only until that install. The feeder package therefore uses an OTA
+password, empty by default, that an adopting configuration can set through
+the `ota_password` substitution.
 
 ## Shared implementation
 
