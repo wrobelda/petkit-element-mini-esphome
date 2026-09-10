@@ -20,10 +20,8 @@
 # petkit-compat-server repository for the verified sequence.
 
 # This file is the package that Kickstart advertises through dashboard_import.
-# It takes only the Wi-Fi credentials from the adopter's secrets.yaml; every
-# other per-device value is a substitution or is written into the adopting
-# YAML by ESPHome Device Builder. petkit-feeder-local.yaml layers this
-# checkout's secrets on top for the installer and the manual procedure.
+# It takes only the Wi-Fi credentials from secrets.yaml; the API key and any
+# other per-device value come from the configuration that includes it.
 substitutions:
   name: petkit-feeder
   friendly_name: Petkit Feeder
@@ -99,15 +97,13 @@ api:
   # Feed will keep working with no network, but expose it to HA when present.
   # Do not reboot this offline-first appliance when Home Assistant is absent.
   reboot_timeout: 0s
-  # The encryption key is per device and lives in the adopting YAML: Device
-  # Builder mints one when it takes control of the bridge, and Home Assistant
-  # re-authenticates with it through the dashboard. The local build supplies
-  # the bridge's own key from petkit-feeder-local.yaml.
+  # The per-device encryption key is set by the configuration that includes
+  # this package.
 
 ota:
   - platform: esphome
     # ESPHome 2026.9 reuses the native API key for encrypted and authenticated
-    # firmware updates, so the adopting YAML must provide an API key.
+    # firmware updates, so an API key is required.
     encryption:
 
 wifi:
