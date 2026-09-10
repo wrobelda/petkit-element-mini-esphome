@@ -856,6 +856,18 @@ def save_expected_mac(path: Path, mac_address: str) -> None:
     path.chmod(0o600)
 
 
+def resolve_host(host: str) -> str:
+    """Return *host*'s IPv4 address, or *host* itself when it does not resolve.
+
+    The bridge is addressed by IP for the rest of the run so that a slow
+    mDNS lookup after one of its reboots cannot stall or fail a request.
+    """
+    try:
+        return socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
+    except (OSError, IndexError):
+        return host
+
+
 def detect_running_firmware(
     python: Path,
     project: Path,
@@ -882,7 +894,7 @@ def detect_running_firmware(
             raise DeviceMismatchError(
                 f"{host} is {identity.mac_address}, not the expected feeder MAC"
             )
-        return DetectedFirmware(host=host, identity=identity)
+        return DetectedFirmware(host=resolve_host(host), identity=identity)
     if errors:
         raise RuntimeError("; ".join(errors))
     return None

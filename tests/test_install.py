@@ -459,6 +459,23 @@ class FirmwarePhaseTest(unittest.TestCase):
         assert detected is not None
         self.assertEqual(detected.identity.project_name, install.FINAL_PROJECT)
 
+    def test_reports_the_resolved_address_of_the_answering_host(self) -> None:
+        final = self.identity(install.FINAL_PROJECT)
+        with (
+            mock.patch.object(install, "read_device_identity", return_value=final),
+            mock.patch.object(install, "resolve_host", return_value="192.0.2.10"),
+        ):
+            detected = install.detect_running_firmware(
+                Path("python"), Path("/project"), ["petkit-kickstart.local"], "key", None
+            )
+
+        assert detected is not None
+        self.assertEqual(detected.host, "192.0.2.10")
+
+    def test_resolve_host_keeps_an_unresolvable_name(self) -> None:
+        with mock.patch.object(install.socket, "getaddrinfo", side_effect=OSError):
+            self.assertEqual(install.resolve_host("nowhere.invalid"), "nowhere.invalid")
+
     def test_rejects_a_different_physical_device(self) -> None:
         final = self.identity(install.FINAL_PROJECT, "E8:68:E7:00:00:02")
         with mock.patch.object(install, "read_device_identity", return_value=final):
