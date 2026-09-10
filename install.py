@@ -1490,8 +1490,6 @@ def main() -> None:
     if not confirm_final_install():
         print(
             "\nFinished after successfully installing Kickstarter.\n\n"
-            "Device Builder creates a new API encryption key for the feeder when "
-            "it takes control; Home Assistant picks that key up on its own.\n\n"
             "In case you have trouble installing final image via ESPHome Device "
             "Builder, you can still install the feeder firmware manually:\n"
             f"  cd {project}\n"
