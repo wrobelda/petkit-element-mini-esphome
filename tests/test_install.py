@@ -470,6 +470,19 @@ class FirmwarePhaseTest(unittest.TestCase):
 
         self.assertEqual(detected.identity.project_name, install.FINAL_PROJECT)
 
+    def test_exhausted_firmware_wait_is_a_clean_timeout(self) -> None:
+        with mock.patch.object(install.time, "monotonic", side_effect=[0, 0, 0]):
+            with self.assertRaises(install.InstallationTimeout):
+                install.wait_for_firmware(
+                    Path("python"),
+                    Path("/project"),
+                    ["192.0.2.10"],
+                    "key",
+                    install.FINAL_PROJECT,
+                    None,
+                    timeout=0,
+                )
+
     def test_install_state_preserves_expected_mac_privately(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "install-state.json"

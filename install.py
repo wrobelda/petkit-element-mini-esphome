@@ -611,15 +611,15 @@ def wait_for_firmware(
             next_progress = now + 10
         time.sleep(2)
     if last_project is not None:
-        raise RuntimeError(
+        raise InstallationTimeout(
             f"expected ESPHome project {expected_project!r}, but {last_project!r} "
             "remained reachable"
         )
     if last_error is not None:
-        raise RuntimeError(
+        raise InstallationTimeout(
             f"could not authenticate the expected ESPHome firmware: {last_error}"
         ) from last_error
-    raise RuntimeError(
+    raise InstallationTimeout(
         f"ESPHome project {expected_project!r} did not become reachable within "
         f"{timeout} seconds"
     )
@@ -1191,9 +1191,9 @@ def main() -> None:
             expected_mac,
             progress_label="the final ESPHome feeder firmware",
         )
-    except RuntimeError as error:
+    except InstallationTimeout as error:
         if migration_error is not None:
-            raise RuntimeError(
+            raise InstallationTimeout(
                 "the migration response was indeterminate and the final firmware "
                 "could not be verified; rerun the installer to reconcile the "
                 "current firmware before another upload"
