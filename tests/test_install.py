@@ -1211,11 +1211,15 @@ class MainResumeTest(unittest.TestCase):
                         install, "confirm_final_install", return_value=False
                     )
                 )
+                printed = stack.enter_context(mock.patch("builtins.print"))
                 install.main()
 
             # Only the convert POST; the final firmware is not installed.
             self.assertEqual(upload.call_count, 1)
             wait.assert_not_called()
+            # The adoption route needs the bridge's API key as a Device Builder secret.
+            output = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
+            self.assertIn(self.SECRETS["api_key"], output)
 
 
 class ConfirmFinalInstallTest(unittest.TestCase):
