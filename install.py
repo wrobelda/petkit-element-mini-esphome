@@ -741,7 +741,7 @@ def wait_for_wifi_network_or_manual(
         manual_wifi_fallback(error, manual_instruction)
         return
     if detected is None:
-        print("  ✓ Continuing on the current network.")
+        print("  ✓ Continuing without waiting for the network switch.")
         return
     print(f"  ✓ Connected to {detected!r}.")
 
@@ -777,10 +777,7 @@ def connect_to_petkit_setup_network(*, debug: bool = False) -> None:
 def reconnect_to_regular_wifi_network(
     ssid: str, *, debug: bool = False, timeout: int = 60
 ) -> None:
-    print(
-        f"\n  → Reconnect this computer to the {ssid!r} network, or press Enter "
-        "to stay on the current network if it can reach the feeder."
-    )
+    print(f"\n  → Reconnect this computer to the {ssid!r} network (or press Enter to continue).")
     wait_for_wifi_network_or_manual(
         ssid,
         manual_instruction="    Press Enter when connected.\n",

@@ -700,7 +700,7 @@ class WifiDetectionTest(unittest.TestCase):
 
         user_input.assert_not_called()
         self.assertIn(
-            "  ✓ Continuing on the current network.",
+            "  ✓ Continuing without waiting for the network switch.",
             [call.args[0] for call in output.call_args_list],
         )
 
