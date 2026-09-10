@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections.abc import Iterator
+import contextlib
 from dataclasses import dataclass
 from datetime import datetime
 import getpass
@@ -12,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shlex
 import shutil
 import socket
 import subprocess
@@ -49,7 +52,29 @@ PLACEHOLDER_SECRETS = {
     "api_key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
 }
 IDENTITY_HELPER = Path("tools/identify_esphome_firmware.py")
-INSTALL_STATE = Path("local-cache/install-state.json")
+LOCAL_CACHE = Path("local-cache")
+INSTALL_STATE = LOCAL_CACHE / "install-state.json"
+RELEASE_DIR = LOCAL_CACHE / "release"
+COMPAT_SERVER_LOG = LOCAL_CACHE / "compat-server.log"
+COMPAT_SERVER_EVENT_LOG = LOCAL_CACHE / "compat-server-events.log"
+COMPAT_SERVER_PORT = 8080
+ESPHOME_VERSION = "2026.9.0b1"
+KICKSTART_IMAGE_NAME = "petkit-element-mini-kickstart-v2.bin"
+KICKSTART_ELF = Path(
+    "esphome/.esphome/build/petkit-kickstart/.pioenvs/petkit-kickstart/firmware.elf"
+)
+# Flash mapping of the Petkit non-OS V2 slots; keep in step with
+# esphome/petkit-kickstart.yaml.
+KICKSTART_IMAGE_ARGS = [
+    "--irom-vma", "0x40201010",
+    "--entry-symbol", "app_entry",
+    "--max-size", "0x0fa000",
+    "--flash-mode", "qio",
+    "--flash-frequency", "40m",
+    "--flash-layout", "2MB-c1",
+]
+STOCK_OTA_CHECK_REQUEST = {"method": "POST", "path": "/6/feedermini/dev_ota_check"}
+STOCK_OTA_START_REQUEST = {"method": "POST", "path": "/6/feedermini/dev_ota_start"}
 KICKSTART_PROJECT = "petkit.fresh-element-mini-kickstart"
 FINAL_PROJECT = "petkit.fresh-element-mini"
 PROVISION_COMMIT_OUTCOME_UNKNOWN_EXIT = 3
@@ -86,6 +111,59 @@ def report_process_failure(result: subprocess.CompletedProcess[str]) -> None:
             print(output.rstrip(), file=sys.stderr)
 
 
+def check_process(result: subprocess.CompletedProcess[str]) -> subprocess.CompletedProcess[str]:
+    """Report a failed command's captured output, then raise CalledProcessError."""
+    if result.returncode != 0:
+        report_process_failure(result)
+        result.check_returncode()
+    return result
+
+
+def announce_command(command: list[str]) -> None:
+    print(f"\n+ {shlex.join(command)}")
+
+
+def create_private_file(path: Path, *, exclusive: bool = False) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+    os.close(os.open(path, flags, 0o600))
+
+
+def write_private_text(path: Path, text: str) -> None:
+    path.write_text(text, encoding="utf-8")
+    path.chmod(0o600)
+
+
+def parse_json_object(text: str, *, source: str) -> dict[str, object]:
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"expected JSON from {source}") from error
+    if not isinstance(parsed, dict):
+        raise RuntimeError(f"expected a JSON object from {source}")
+    return parsed
+
+
+def poll(
+    timeout: float, *, interval: float = 2, progress_label: str | None = None
+) -> Iterator[float]:
+    """Yield the current monotonic time until *timeout* elapses.
+
+    Prints a progress line every 10 seconds when *progress_label* is set and
+    sleeps *interval* seconds between iterations.
+    """
+    deadline = time.monotonic() + timeout
+    next_progress = time.monotonic() + 10
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            return
+        yield now
+        if progress_label is not None and now >= next_progress:
+            print(f"  … Still waiting for {progress_label}...")
+            next_progress = now + 10
+        time.sleep(interval)
+
+
 def run(
     command: list[str],
     *,
@@ -94,25 +172,21 @@ def run(
     debug: bool = False,
 ) -> None:
     if debug:
-        print(f"\n+ {' '.join(command)}")
+        announce_command(command)
         subprocess.run(command, cwd=cwd, env=env, check=True)
         return
-    result = subprocess.run(
-        command,
-        cwd=cwd,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        report_process_failure(result)
-        raise subprocess.CalledProcessError(
-            result.returncode,
-            command,
-            output=result.stdout,
-            stderr=result.stderr,
+    check_process(
+        subprocess.run(
+            command, cwd=cwd, env=env, check=False, capture_output=True, text=True
         )
+    )
+
+
+def curl_config_line(username: str, password: str) -> str:
+    def quote(value: str) -> str:
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
+    return f'user = "{quote(username)}:{quote(password)}"\n'
 
 
 def run_authenticated_curl(
@@ -120,31 +194,22 @@ def run_authenticated_curl(
     *,
     username: str,
     password: str,
-    cwd: Path,
     debug: bool = False,
-) -> None:
-    def quote(value: str) -> str:
-        return value.replace("\\", "\\\\").replace('"', '\\"')
-
+    capture: bool = False,
+) -> str:
+    """Run curl with digest credentials passed on stdin; return captured stdout."""
     command = ["curl", "--config", "-", "--digest", "--fail-with-body", *arguments]
     if debug:
-        print(f"\n+ curl --config - {' '.join(command[3:])}")
+        announce_command(command)
     result = subprocess.run(
         command,
-        cwd=cwd,
-        input=f'user = "{quote(username)}:{quote(password)}"\n',
+        input=curl_config_line(username, password),
         text=True,
         check=False,
-        capture_output=not debug,
+        capture_output=capture or not debug,
     )
-    if result.returncode != 0:
-        report_process_failure(result)
-        raise subprocess.CalledProcessError(
-            result.returncode,
-            command,
-            output=result.stdout,
-            stderr=result.stderr,
-        )
+    check_process(result)
+    return result.stdout or ""
 
 
 def download_recovery(
@@ -153,17 +218,14 @@ def download_recovery(
     url: str,
     username: str,
     password: str,
-    cwd: Path,
     debug: bool = False,
 ) -> None:
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    os.close(descriptor)
+    create_private_file(path, exclusive=True)
     try:
         run_authenticated_curl(
             ["--output", str(path), url],
             username=username,
             password=password,
-            cwd=cwd,
             debug=debug,
         )
         path.chmod(0o600)
@@ -177,35 +239,17 @@ def fetch_authenticated_json(
     *,
     username: str,
     password: str,
-    cwd: Path,
     debug: bool = False,
 ) -> dict[str, object]:
-    def quote(value: str) -> str:
-        return value.replace("\\", "\\\\").replace('"', '\\"')
-
-    command = ["curl", "--config", "-", "--digest", "--fail-with-body", url]
-    if debug:
-        print(f"\n+ {' '.join(command[3:])}")
-    result = subprocess.run(
-        command,
-        cwd=cwd,
-        input=f'user = "{quote(username)}:{quote(password)}"\n',
-        text=True,
-        check=False,
-        capture_output=True,
+    # Polled while the bridge reboots, so bound the connect and transfer time.
+    text = run_authenticated_curl(
+        ["--connect-timeout", "5", "--max-time", "30", url],
+        username=username,
+        password=password,
+        debug=debug,
+        capture=True,
     )
-    if result.returncode != 0:
-        report_process_failure(result)
-        raise subprocess.CalledProcessError(
-            result.returncode, command, output=result.stdout, stderr=result.stderr
-        )
-    try:
-        parsed = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"expected JSON from {url}") from error
-    if not isinstance(parsed, dict):
-        raise RuntimeError(f"expected a JSON object from {url}")
-    return parsed
+    return parse_json_object(text, source=url)
 
 
 def post_authenticated(
@@ -213,14 +257,12 @@ def post_authenticated(
     *,
     username: str,
     password: str,
-    cwd: Path,
     debug: bool = False,
 ) -> None:
     run_authenticated_curl(
         ["--request", "POST", url],
         username=username,
         password=password,
-        cwd=cwd,
         debug=debug,
     )
 
@@ -231,7 +273,6 @@ def wait_for_slot(
     *,
     username: str,
     password: str,
-    cwd: Path,
     timeout: int = 300,
     debug: bool = False,
 ) -> None:
@@ -241,29 +282,19 @@ def wait_for_slot(
     relocation from the lower slot completes when this reports 2. Relocation
     reboots the bridge, so try each host until one answers.
     """
-    if isinstance(hosts, str):
-        hosts = [hosts]
-    deadline = time.monotonic() + timeout
-    next_progress = time.monotonic() + 10
-    while time.monotonic() < deadline:
+    for _ in poll(timeout, progress_label=f"the bridge to reach slot {expected_slot}"):
         for host in hosts:
             try:
                 status = fetch_authenticated_json(
                     f"http://{host}/hub/slot_status",
                     username=username,
                     password=password,
-                    cwd=cwd,
                     debug=debug,
                 )
             except (subprocess.CalledProcessError, RuntimeError):
                 continue
-            if status is not None and status.get("current_slot") == expected_slot:
+            if status.get("current_slot") == expected_slot:
                 return
-        now = time.monotonic()
-        if now >= next_progress:
-            print(f"  … Still waiting for the bridge to reach slot {expected_slot}...")
-            next_progress = now + 10
-        time.sleep(2)
     raise InstallationTimeout(f"the bridge did not reach slot {expected_slot}")
 
 
@@ -272,41 +303,31 @@ def wait_for_conversion(
     *,
     username: str,
     password: str,
-    cwd: Path,
     timeout: int = 300,
     debug: bool = False,
 ) -> None:
-    deadline = time.monotonic() + timeout
-    next_progress = time.monotonic() + 10
-    while time.monotonic() < deadline:
+    for _ in poll(timeout, progress_label="the bridge to finish preparing"):
         try:
             status = fetch_authenticated_json(
                 f"http://{host}/hub/convert",
                 username=username,
                 password=password,
-                cwd=cwd,
                 debug=debug,
             )
         except (subprocess.CalledProcessError, RuntimeError):
-            status = None
-        if status is not None:
-            result = str(status.get("result", ""))
-            # already_converted is the layout-is-eboot signal on every boot
-            # after the first; success is the conversion boot itself.
-            if result in ("success", "already_converted"):
-                return
-            # Everything except a still-running conversion is terminal.
-            if result not in ("idle", "in_progress", ""):
-                raise RuntimeError(
-                    f"the bridge reported a failed conversion: {result}. "
-                    "The recovery image and POST /hub/boot_other are the way "
-                    "back to the stock firmware."
-                )
-        now = time.monotonic()
-        if now >= next_progress:
-            print("  … Still waiting for the bridge to finish preparing...")
-            next_progress = now + 10
-        time.sleep(2)
+            continue
+        result = str(status.get("result", ""))
+        # already_converted is the layout-is-eboot signal on every boot after
+        # the first; success is the conversion boot itself.
+        if result in ("success", "already_converted"):
+            return
+        # Everything except a still-running conversion is terminal.
+        if result not in ("idle", "in_progress", ""):
+            raise RuntimeError(
+                f"the bridge reported a failed conversion: {result}. "
+                "The recovery image and POST /hub/boot_other are the way "
+                "back to the stock firmware."
+            )
     raise InstallationTimeout("the bridge did not report a successful conversion")
 
 
@@ -331,11 +352,7 @@ def confirm_final_install() -> bool:
     return prompt(
         "    Compile and install the feeder firmware from this installer instead",
         "no",
-    ).strip().lower() in ("y", "yes")
-
-
-def yaml_string(value: str) -> str:
-    return json.dumps(value)
+    ).lower() in ("y", "yes")
 
 
 def read_yaml_secrets(path: Path, python: Path) -> dict[str, str]:
@@ -351,14 +368,9 @@ def read_yaml_secrets(path: Path, python: Path) -> dict[str, str]:
         text=True,
     )
     if result.returncode != 0:
-        detail = result.stderr.strip().splitlines()[-1] if result.stderr.strip() else "unknown error"
+        detail = (result.stderr.strip().splitlines() or ["unknown error"])[-1]
         raise RuntimeError(f"could not parse {path} as YAML: {detail}")
-    try:
-        parsed = json.loads(result.stdout)
-    except json.JSONDecodeError as error:
-        raise RuntimeError(f"YAML loader returned invalid data for {path}") from error
-    if not isinstance(parsed, dict):
-        raise RuntimeError(f"{path} must contain a YAML mapping")
+    parsed = parse_json_object(result.stdout, source=f"the YAML loader for {path}")
 
     values: dict[str, str] = {}
     for key, value in parsed.items():
@@ -387,28 +399,24 @@ def write_secrets(path: Path) -> dict[str, str]:
             base64.b64encode(secrets.token_bytes(32)).decode("ascii"),
         ),
     }
-    path.write_text(
+    write_private_text(
+        path,
         "# Generated by install.py. Do not commit this file.\n"
-        + "".join(f"{key}: {yaml_string(value)}\n" for key, value in values.items()),
-        encoding="utf-8",
+        + "".join(f"{key}: {json.dumps(value)}\n" for key, value in values.items()),
     )
-    path.chmod(0o600)
     return values
 
 
-def display_path(path: Path, project: Path | None) -> str:
-    if project is None:
-        return str(path)
+def display_path(path: Path) -> str:
+    """Show paths inside the project checkout relative to it."""
     try:
-        return f"./{path.relative_to(project)}"
+        return f"./{path.relative_to(Path(__file__).resolve().parent)}"
     except ValueError:
         return str(path)
 
 
-def load_or_create_secrets(
-    path: Path, python: Path, *, project: Path | None = None
-) -> dict[str, str]:
-    display = display_path(path, project)
+def load_or_create_secrets(path: Path, python: Path) -> dict[str, str]:
+    display = display_path(path)
     if path.exists():
         values = read_yaml_secrets(path, python)
         path.chmod(0o600)
@@ -421,6 +429,18 @@ def load_or_create_secrets(
             print(f"  ✓ Using existing {display}")
         return values
     return write_secrets(path)
+
+
+def installed_esphome_version(python: Path) -> str | None:
+    if not python.exists():
+        return None
+    result = subprocess.run(
+        [str(python), "-c", "import importlib.metadata as m; print(m.version('esphome'))"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else None
 
 
 def detect_timezone() -> str:
@@ -441,30 +461,40 @@ def detect_local_ip() -> str:
         return str(sock.getsockname()[0])
 
 
+def nmcli_wifi_list(nmcli: str, fields: str, *, rescan: bool, failure: str) -> list[str]:
+    result = subprocess.run(
+        [
+            nmcli,
+            "--terse",
+            "--escape",
+            "no",
+            "--fields",
+            fields,
+            "device",
+            "wifi",
+            "list",
+            "--rescan",
+            "yes" if rescan else "no",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise WifiDetectionUnavailable(failure)
+    return result.stdout.splitlines()
+
+
 def current_wifi_ssid() -> str | None:
     nmcli = shutil.which("nmcli")
     if nmcli is not None:
-        result = subprocess.run(
-            [
-                nmcli,
-                "--terse",
-                "--escape",
-                "no",
-                "--fields",
-                "IN-USE,SSID",
-                "device",
-                "wifi",
-                "list",
-                "--rescan",
-                "no",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        lines = nmcli_wifi_list(
+            nmcli,
+            "IN-USE,SSID",
+            rescan=False,
+            failure="NetworkManager could not read Wi-Fi state",
         )
-        if result.returncode != 0:
-            raise WifiDetectionUnavailable("NetworkManager could not read Wi-Fi state")
-        for line in result.stdout.splitlines():
+        for line in lines:
             if line.startswith("*:"):
                 return line[2:]
         return None
@@ -516,27 +546,13 @@ def detect_wifi_ssid() -> str | None:
 def available_wifi_ssids() -> list[str]:
     nmcli = shutil.which("nmcli")
     if nmcli is not None:
-        result = subprocess.run(
-            [
-                nmcli,
-                "--terse",
-                "--escape",
-                "no",
-                "--fields",
-                "SSID",
-                "device",
-                "wifi",
-                "list",
-                "--rescan",
-                "yes",
-            ],
-            check=False,
-            capture_output=True,
-            text=True,
+        lines = nmcli_wifi_list(
+            nmcli,
+            "SSID",
+            rescan=True,
+            failure="NetworkManager could not scan for Wi-Fi networks",
         )
-        if result.returncode != 0:
-            raise WifiDetectionUnavailable("NetworkManager could not scan for Wi-Fi networks")
-        return sorted({line for line in result.stdout.splitlines() if line})
+        return sorted({line for line in lines if line})
 
     system_profiler = shutil.which("system_profiler")
     if system_profiler is not None:
@@ -588,24 +604,20 @@ def available_wifi_ssids() -> list[str]:
 
 
 def wait_for_available_wifi_networks(prefix: str, *, timeout: int = 180) -> list[str]:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    for _ in poll(timeout):
         matches = [ssid for ssid in available_wifi_ssids() if ssid.startswith(prefix)]
         if matches:
             return matches
-        time.sleep(2)
     raise TimeoutError(
         f"no Wi-Fi network beginning with {prefix!r} appeared within {timeout} seconds"
     )
 
 
 def wait_for_wifi_network(expected_ssid: str, *, timeout: int = 180) -> str:
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
+    for _ in poll(timeout, interval=1):
         ssid = current_wifi_ssid()
         if ssid == expected_ssid:
             return ssid
-        time.sleep(1)
     raise TimeoutError(
         f"Wi-Fi network {expected_ssid!r} was not connected within {timeout} seconds"
     )
@@ -623,6 +635,12 @@ def choose_wifi_network(ssids: list[str]) -> str:
         print("  Choose one of the listed Petkit setup networks.")
 
 
+def manual_wifi_fallback(error: Exception, instruction: str, *, debug: bool) -> None:
+    if debug:
+        print(f"  Automatic Wi-Fi detection unavailable: {error}")
+    input(instruction)
+
+
 def wait_for_wifi_network_or_manual(
     expected_ssid: str,
     *,
@@ -637,16 +655,10 @@ def wait_for_wifi_network_or_manual(
     """
     try:
         detected = wait_for_wifi_network(expected_ssid, timeout=timeout)
-    except WifiDetectionUnavailable as error:
-        if debug:
-            print(f"  Automatic Wi-Fi detection unavailable: {error}")
-    except TimeoutError:
-        if debug:
-            print("  Did not detect the Wi-Fi switch automatically.")
-    else:
-        print(f"  ✓ Connected to {detected!r}.")
+    except (WifiDetectionUnavailable, TimeoutError) as error:
+        manual_wifi_fallback(error, manual_instruction, debug=debug)
         return
-    input(manual_instruction)
+    print(f"  ✓ Connected to {detected!r}.")
 
 
 def connect_to_petkit_setup_network(*, debug: bool = False) -> None:
@@ -670,9 +682,7 @@ def connect_to_petkit_setup_network(*, debug: bool = False) -> None:
             "will continue automatically."
         )
     except (WifiDetectionUnavailable, TimeoutError) as error:
-        if debug:
-            print(f"  Automatic Wi-Fi detection unavailable: {error}")
-        input(manual_instruction)
+        manual_wifi_fallback(error, manual_instruction, debug=debug)
         return
     wait_for_wifi_network_or_manual(
         selected_softap, manual_instruction=manual_instruction, debug=debug
@@ -721,12 +731,12 @@ def read_device_identity(
         detail = result.stderr.strip() or "unknown ESPHome API error"
         raise RuntimeError(f"could not identify ESPHome firmware at {host}: {detail}")
     try:
-        data = json.loads(result.stdout)
+        data = parse_json_object(result.stdout, source=host)
         return DeviceIdentity(
-            mac_address=data["mac_address"],
-            project_name=data["project_name"],
+            mac_address=str(data["mac_address"]),
+            project_name=str(data["project_name"]),
         )
-    except (KeyError, TypeError, json.JSONDecodeError) as error:
+    except (KeyError, RuntimeError) as error:
         raise RuntimeError(f"invalid ESPHome identity returned for {host}") from error
 
 
@@ -750,11 +760,9 @@ def load_expected_mac(path: Path) -> str | None:
 def save_expected_mac(path: Path, mac_address: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")
-    temporary.write_text(
-        json.dumps({"device_mac": normalize_mac(mac_address)}) + "\n",
-        encoding="utf-8",
+    write_private_text(
+        temporary, json.dumps({"device_mac": normalize_mac(mac_address)}) + "\n"
     )
-    temporary.chmod(0o600)
     os.replace(temporary, path)
     path.chmod(0o600)
 
@@ -802,11 +810,9 @@ def wait_for_firmware(
     timeout: int = 180,
     progress_label: str | None = None,
 ) -> DetectedFirmware:
-    deadline = time.monotonic() + timeout
-    next_progress = time.monotonic() + 10
     last_project: str | None = None
     last_error: RuntimeError | None = None
-    while time.monotonic() < deadline:
+    for _ in poll(timeout, progress_label=progress_label):
         try:
             detected = detect_running_firmware(
                 python, project, hosts, api_key, expected_mac
@@ -820,11 +826,6 @@ def wait_for_firmware(
             last_project = detected.identity.project_name
             if last_project == expected_project:
                 return detected
-        now = time.monotonic()
-        if progress_label is not None and now >= next_progress:
-            print(f"  … Still waiting for {progress_label}...")
-            next_progress = now + 10
-        time.sleep(2)
     if last_project is not None:
         raise InstallationTimeout(
             f"expected ESPHome project {expected_project!r}, but {last_project!r} "
@@ -844,7 +845,7 @@ def run_provisioner(
     command: list[str], *, cwd: Path, env: dict[str, str], debug: bool = False
 ) -> bool:
     if debug:
-        print(f"\n+ {' '.join(command)}")
+        announce_command(command)
     result = subprocess.run(
         command,
         cwd=cwd,
@@ -853,17 +854,10 @@ def run_provisioner(
         capture_output=not debug,
         text=not debug,
     )
-    if result.returncode == 0:
-        return True
     if result.returncode == PROVISION_COMMIT_OUTCOME_UNKNOWN_EXIT:
         return False
-    report_process_failure(result)
-    raise subprocess.CalledProcessError(
-        result.returncode,
-        command,
-        output=result.stdout,
-        stderr=result.stderr,
-    )
+    check_process(result)
+    return True
 
 
 def require_build_artifact(path: Path, description: str) -> None:
@@ -903,23 +897,39 @@ def wait_for_server_event(
     delayed_message: str | None = None,
     message_delay: int = 30,
 ) -> bool:
-    deadline = time.monotonic() + timeout
-    next_progress = time.monotonic() + 10
     message_at = time.monotonic() + message_delay
-    while time.monotonic() < deadline:
+    for now in poll(timeout, interval=1, progress_label=progress_label):
         if server.poll() is not None:
             raise RuntimeError("the local Petkit API server stopped")
         if server_log_has_event(path, event_name, required_fields):
             return True
-        now = time.monotonic()
-        if progress_label is not None and now >= next_progress:
-            print(f"  … Still waiting for {progress_label}...")
-            next_progress = now + 10
         if delayed_message is not None and now >= message_at:
             print(f"\n{delayed_message}")
             delayed_message = None
-        time.sleep(1)
     return False
+
+
+def require_server_event(
+    path: Path,
+    server: subprocess.Popen[bytes],
+    *,
+    required_fields: dict[str, object],
+    timeout: int,
+    progress_label: str,
+    failure: str,
+    delayed_message: str | None = None,
+) -> None:
+    """Wait for a stock-firmware request or raise a timeout naming *failure*."""
+    if not wait_for_server_event(
+        path,
+        server,
+        "request",
+        required_fields=required_fields,
+        timeout=timeout,
+        progress_label=progress_label,
+        delayed_message=delayed_message,
+    ):
+        raise InstallationTimeout(f"{failure} within {timeout} seconds")
 
 
 def github_repository(url: str) -> str | None:
@@ -955,20 +965,13 @@ def validate_checkout(path: Path, name: str, revision: str) -> None:
     missing = [marker for marker in REPOSITORY_MARKERS[name] if not (path / marker).is_file()]
     if missing:
         raise RuntimeError(f"{path} is missing required files: {', '.join(missing)}")
-    head = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
+    head, expected = subprocess.run(
+        ["git", "rev-parse", "HEAD", f"{revision}^{{commit}}"],
         cwd=path,
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.strip()
-    expected = subprocess.run(
-        ["git", "rev-parse", f"{revision}^{{commit}}"],
-        cwd=path,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    ).stdout.split()
     if head != expected:
         raise RuntimeError(
             f"{path} is at {head[:12]}, but this installer requires {revision}; "
@@ -992,6 +995,222 @@ def ensure_checkout(
     run(["git", "checkout", "--detach", revision], cwd=path, debug=debug)
     validate_checkout(path, name, revision)
     return path
+
+
+@contextlib.contextmanager
+def compat_server(
+    python: Path,
+    compat: Path,
+    transition: Path,
+    *,
+    log_path: Path,
+    event_log_path: Path,
+    debug: bool = False,
+) -> Iterator[subprocess.Popen[bytes]]:
+    """Run the local Petkit API server for the duration of the block.
+
+    Without --debug the server's output is kept in *log_path* and shown only
+    when the block fails for a reason other than an expected timeout.
+    """
+    create_private_file(event_log_path)
+    log = None
+    popen_output: dict[str, object] = {}
+    if not debug:
+        create_private_file(log_path)
+        log = open(log_path, "w", encoding="utf-8")
+        popen_output = {"stdout": log, "stderr": subprocess.STDOUT}
+    server: subprocess.Popen[bytes] | None = None
+    try:
+        print("  • Starting the local compatibility server...")
+        server = subprocess.Popen(
+            [
+                str(python),
+                "-u",
+                "serve_petkit_api.py",
+                "--host",
+                "0.0.0.0",
+                "--port",
+                str(COMPAT_SERVER_PORT),
+                "--profile",
+                str(PROFILE),
+                "--ota-image",
+                str(transition),
+                "--event-log",
+                str(event_log_path),
+            ],
+            cwd=compat,
+            **popen_output,
+        )
+        time.sleep(1)
+        if server.poll() is not None:
+            raise RuntimeError("the local Petkit API server did not start")
+        yield server
+    except BaseException as error:
+        if not isinstance(error, InstallationTimeout) and log is not None:
+            log.flush()
+            diagnostics = log_path.read_text(encoding="utf-8").strip()
+            if diagnostics:
+                print(diagnostics, file=sys.stderr)
+        raise
+    finally:
+        if server is not None:
+            server.terminate()
+            try:
+                server.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server.kill()
+        if log is not None:
+            log.close()
+
+
+def build_kickstart_image(
+    python: Path,
+    esphome: Path,
+    project: Path,
+    kickstart: Path,
+    build_env: dict[str, str],
+    *,
+    debug: bool = False,
+) -> Path:
+    """Compile the Kickstart bridge and package it as a stock-compatible V2 image."""
+    print("  • Building the Kickstart transition firmware...")
+    run(
+        [str(esphome), "compile", "petkit-kickstart.yaml"],
+        cwd=project / "esphome",
+        env=build_env,
+        debug=debug,
+    )
+    transition_elf = project / KICKSTART_ELF
+    require_build_artifact(transition_elf, "Kickstart ELF")
+    transition = project / RELEASE_DIR / KICKSTART_IMAGE_NAME
+    print("  • Packaging the stock-compatible Kickstart image...")
+    run(
+        [
+            str(python),
+            str(kickstart / "tools/build_esp8266_nonos_v2.py"),
+            *KICKSTART_IMAGE_ARGS,
+            str(transition_elf),
+            str(transition),
+        ],
+        cwd=project,
+        debug=debug,
+    )
+    return transition
+
+
+def install_kickstart(
+    python: Path,
+    project: Path,
+    compat: Path,
+    transition: Path,
+    values: dict[str, str],
+    hosts: list[str],
+    expected_mac: str | None,
+    *,
+    debug: bool = False,
+) -> DetectedFirmware:
+    """Provision the stock feeder to fetch Kickstart and wait for it to boot."""
+    print("\n🔹 Phase 1 of 3 — Install the temporary Kickstart bridge")
+    print("  • Confirm how the feeder can reach this computer.")
+    network = f"the {values['wifi_ssid']!r} network"
+    computer_ip = prompt(f"    Computer IP address on {network}", detect_local_ip())
+    server_url = f"http://{computer_ip}:{COMPAT_SERVER_PORT}"
+    offset = datetime.now().astimezone().utcoffset()
+    timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
+    event_log_path = project / COMPAT_SERVER_EVENT_LOG
+    with compat_server(
+        python,
+        compat,
+        transition,
+        log_path=project / COMPAT_SERVER_LOG,
+        event_log_path=event_log_path,
+        debug=debug,
+    ) as server:
+        print("  • Checking whether the stock feeder already contacts this computer...")
+        already_provisioned = wait_for_server_event(
+            event_log_path, server, "request", required_fields=STOCK_OTA_CHECK_REQUEST
+        )
+        if already_provisioned:
+            print(
+                "  ✓ The feeder was already set up to use this computer as a "
+                "server; skipping Wi-Fi setup."
+            )
+        else:
+            input(
+                "\n  → Put the feeder in setup mode.\n"
+                "    Press Enter after the confirmation beep.\n"
+            )
+            connect_to_petkit_setup_network(debug=debug)
+            provision_env = os.environ.copy()
+            provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
+            print("  • Sending Wi-Fi and local-server settings to the feeder...")
+            acknowledged = run_provisioner(
+                [
+                    str(python),
+                    "provision_petkit_device.py",
+                    "--profile",
+                    str(PROFILE),
+                    "--ssid",
+                    values["wifi_ssid"],
+                    "--server",
+                    f"{server_url}/6/",
+                    "--timezone",
+                    timezone_offset,
+                    "--locale",
+                    values["timezone"],
+                    "--send",
+                ],
+                cwd=compat,
+                env=provision_env,
+                debug=debug,
+            )
+            print("  ✓ Wi-Fi and local-server settings sent.")
+            if not acknowledged:
+                print(
+                    "    The SoftAP connection ended before acknowledgement. "
+                    f"The installer will verify the result on {network}."
+                )
+            reconnect_to_regular_wifi_network(values["wifi_ssid"], debug=debug)
+            print("  • Waiting for the feeder to contact this computer...")
+            require_server_event(
+                event_log_path,
+                server,
+                required_fields=STOCK_OTA_CHECK_REQUEST,
+                timeout=180,
+                progress_label="the feeder to contact this computer",
+                failure="the feeder did not contact the local compatibility server",
+                delayed_message=(
+                    f"  ⚠️  No connection has arrived yet. TCP port "
+                    f"{COMPAT_SERVER_PORT} on {computer_ip} must be reachable from "
+                    f"{network}.\n     On another device connected to that "
+                    "network, open this address in a web browser:\n\n"
+                    f"       {server_url}/\n\n"
+                    "     A response showing status 'ready' proves that the "
+                    "server is reachable."
+                ),
+            )
+        print("  ✓ The feeder contacted this computer.")
+        print("  • Waiting for the stock firmware to accept Kickstart...")
+        require_server_event(
+            event_log_path,
+            server,
+            required_fields=STOCK_OTA_START_REQUEST,
+            timeout=60,
+            progress_label="the stock firmware to accept Kickstart",
+            failure="the stock firmware did not accept Kickstart",
+        )
+        print("  ✓ The stock firmware accepted Kickstart.")
+        print("  • Waiting for the feeder to download, validate, and boot Kickstart...")
+        return wait_for_firmware(
+            python,
+            project,
+            hosts,
+            values["api_key"],
+            KICKSTART_PROJECT,
+            expected_mac,
+            timeout=600,
+            progress_label="the temporary Kickstart bridge",
+        )
 
 
 def main() -> None:
@@ -1041,7 +1260,7 @@ def main() -> None:
         debug=args.debug,
     )
     if shutil.which("curl") is None:
-        raise SystemExit("curl is required for the authenticated migration upload")
+        raise SystemExit("curl is required to talk to the Kickstart bridge")
 
     venv = project / ".venv"
     if not venv.exists():
@@ -1053,17 +1272,18 @@ def main() -> None:
         )
     python = venv / "bin" / "python"
     esphome = venv / "bin" / "esphome"
-    print("  • Preparing ESPHome build dependencies...")
-    run(
-        [str(python), "-m", "pip", "install", "esphome==2026.9.0b1"],
-        cwd=project,
-        debug=args.debug,
-    )
+    if installed_esphome_version(python) != ESPHOME_VERSION:
+        print("  • Preparing ESPHome build dependencies...")
+        run(
+            [str(python), "-m", "pip", "install", f"esphome=={ESPHOME_VERSION}"],
+            cwd=project,
+            debug=args.debug,
+        )
 
     print("  • Loading installation settings...")
     secrets_path = project / "esphome" / "secrets.yaml"
-    secrets_display = display_path(secrets_path, project)
-    values = load_or_create_secrets(secrets_path, python, project=project)
+    secrets_display = display_path(secrets_path)
+    values = load_or_create_secrets(secrets_path, python)
     required = {
         "wifi_ssid",
         "wifi_password",
@@ -1087,45 +1307,8 @@ def main() -> None:
 
     build_env = os.environ.copy()
     build_env["KICKSTART_COMPONENTS_PATH"] = str((kickstart / "components").resolve())
-    print("  • Building the Kickstart transition firmware...")
-    run(
-        [str(esphome), "compile", "petkit-kickstart.yaml"],
-        cwd=project / "esphome",
-        env=build_env,
-        debug=args.debug,
-    )
-
-    release = project / "local-cache" / "release"
+    release = project / RELEASE_DIR
     release.mkdir(parents=True, exist_ok=True)
-    transition = release / "petkit-element-mini-kickstart-v2.bin"
-    transition_elf = (
-        project
-        / "esphome/.esphome/build/petkit-kickstart/.pioenvs/petkit-kickstart/firmware.elf"
-    )
-    require_build_artifact(transition_elf, "Kickstart ELF")
-    print("  • Packaging the stock-compatible Kickstart image...")
-    run(
-        [
-            str(python),
-            str(kickstart / "tools/build_esp8266_nonos_v2.py"),
-            "--irom-vma",
-            "0x40201010",
-            "--entry-symbol",
-            "app_entry",
-            "--max-size",
-            "0x0fa000",
-            "--flash-mode",
-            "qio",
-            "--flash-frequency",
-            "40m",
-            "--flash-layout",
-            "2MB-c1",
-            str(transition_elf),
-            str(transition),
-        ],
-        cwd=project,
-        debug=args.debug,
-    )
 
     state_path = project / INSTALL_STATE
     expected_mac = load_expected_mac(state_path)
@@ -1146,199 +1329,19 @@ def main() -> None:
         return
 
     if detected is None:
-        print("\n🔹 Phase 1 of 3 — Install the temporary Kickstart bridge")
-        print("  • Confirm how the feeder can reach this computer.")
-        computer_ip = prompt(
-            f"    Computer IP address on the {values['wifi_ssid']!r} network",
-            detect_local_ip(),
+        transition = build_kickstart_image(
+            python, esphome, project, kickstart, build_env, debug=args.debug
         )
-        timezone_name = values["timezone"]
-        offset = datetime.now().astimezone().utcoffset()
-        timezone_offset = str((offset.total_seconds() if offset else 0) / 3600)
-        server: subprocess.Popen[bytes] | None = None
-        server_log = None
-        server_log_path = project / "local-cache" / "compat-server.log"
-        server_event_log_path = project / "local-cache" / "compat-server-events.log"
-        try:
-            descriptor = os.open(
-                server_event_log_path,
-                os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                0o600,
-            )
-            os.close(descriptor)
-            popen_output: dict[str, object] = {}
-            if not args.debug:
-                descriptor = os.open(
-                    server_log_path,
-                    os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-                    0o600,
-                )
-                server_log = os.fdopen(descriptor, "w", encoding="utf-8")
-                popen_output = {
-                    "stdout": server_log,
-                    "stderr": subprocess.STDOUT,
-                }
-            print("  • Starting the local compatibility server...")
-            server = subprocess.Popen(
-                [
-                    str(python),
-                    "-u",
-                    "serve_petkit_api.py",
-                    "--host",
-                    "0.0.0.0",
-                    "--port",
-                    "8080",
-                    "--profile",
-                    str(PROFILE),
-                    "--ota-image",
-                    str(transition),
-                    "--event-log",
-                    str(server_event_log_path),
-                ],
-                cwd=compat,
-                **popen_output,
-            )
-            time.sleep(1)
-            if server.poll() is not None:
-                raise RuntimeError("the local Petkit API server did not start")
-            print(
-                "  • Checking whether the stock feeder already contacts this "
-                "computer..."
-            )
-            already_provisioned = wait_for_server_event(
-                server_event_log_path,
-                server,
-                "request",
-                required_fields={
-                    "method": "POST",
-                    "path": "/6/feedermini/dev_ota_check",
-                },
-            )
-            if already_provisioned:
-                print(
-                    "  ✓ The feeder was already set up to use this computer as a "
-                    "server; skipping Wi-Fi setup."
-                )
-            else:
-                input(
-                    "\n  → Put the feeder in setup mode.\n"
-                    "    Press Enter after the confirmation beep.\n"
-                )
-                connect_to_petkit_setup_network(debug=args.debug)
-                provision_env = os.environ.copy()
-                provision_env["ESPHOME_WIFI_PASSWORD"] = values["wifi_password"]
-                print("  • Sending Wi-Fi and local-server settings to the feeder...")
-                acknowledged = run_provisioner(
-                    [
-                        str(python),
-                        "provision_petkit_device.py",
-                        "--profile",
-                        str(PROFILE),
-                        "--ssid",
-                        values["wifi_ssid"],
-                        "--server",
-                        f"http://{computer_ip}:8080/6/",
-                        "--timezone",
-                        timezone_offset,
-                        "--locale",
-                        timezone_name,
-                        "--send",
-                    ],
-                    cwd=compat,
-                    env=provision_env,
-                    debug=args.debug,
-                )
-                print("  ✓ Wi-Fi and local-server settings sent.")
-                if not acknowledged:
-                    print(
-                        "    The SoftAP connection ended before acknowledgement. "
-                        f"The installer will verify the result on the "
-                        f"{values['wifi_ssid']!r} network."
-                    )
-                reconnect_to_regular_wifi_network(
-                    values["wifi_ssid"], debug=args.debug
-                )
-            if already_provisioned:
-                print("  ✓ The feeder contacted this computer.")
-            else:
-                print("  • Waiting for the feeder to contact this computer...")
-                if not wait_for_server_event(
-                    server_event_log_path,
-                    server,
-                    "request",
-                    required_fields={
-                        "method": "POST",
-                        "path": "/6/feedermini/dev_ota_check",
-                    },
-                    timeout=180,
-                    progress_label="the feeder to contact this computer",
-                    delayed_message=(
-                        "  ⚠️  No connection has arrived yet. TCP port 8080 on "
-                        f"{computer_ip} must be reachable from the "
-                        f"{values['wifi_ssid']!r} network.\n     On another "
-                        "device connected to that network, open this address in "
-                        "a web browser:\n\n"
-                        f"       http://{computer_ip}:8080/\n\n"
-                        "     A response showing status 'ready' proves that the "
-                        "server is reachable."
-                    ),
-                ):
-                    raise InstallationTimeout(
-                        "the feeder did not contact the local compatibility "
-                        "server within 180 seconds"
-                    )
-                print("  ✓ The feeder contacted this computer.")
-            print("  • Waiting for the stock firmware to accept Kickstart...")
-            if not wait_for_server_event(
-                server_event_log_path,
-                server,
-                "request",
-                required_fields={
-                    "method": "POST",
-                    "path": "/6/feedermini/dev_ota_start",
-                },
-                timeout=60,
-                progress_label="the stock firmware to accept Kickstart",
-            ):
-                raise InstallationTimeout(
-                    "the stock firmware did not accept Kickstart within 60 seconds"
-                )
-            print("  ✓ The stock firmware accepted Kickstart.")
-            print(
-                "  • Waiting for the feeder to download, validate, and boot "
-                "Kickstart..."
-            )
-            detected = wait_for_firmware(
-                python,
-                project,
-                [args.kickstart_host, args.final_host],
-                values["api_key"],
-                KICKSTART_PROJECT,
-                expected_mac,
-                timeout=600,
-                progress_label="the temporary Kickstart bridge",
-            )
-        except BaseException as error:
-            if (
-                not isinstance(error, InstallationTimeout)
-                and server is not None
-                and server_log is not None
-            ):
-                server_log.flush()
-                diagnostics = server_log_path.read_text(encoding="utf-8").strip()
-                if diagnostics:
-                    print(diagnostics, file=sys.stderr)
-            raise
-        finally:
-            if server is not None:
-                server.terminate()
-                try:
-                    server.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    server.kill()
-            if server_log is not None:
-                server_log.close()
-    assert detected is not None
+        detected = install_kickstart(
+            python,
+            project,
+            compat,
+            transition,
+            values,
+            [args.kickstart_host, args.final_host],
+            expected_mac,
+            debug=args.debug,
+        )
     if detected.identity.project_name != KICKSTART_PROJECT:
         raise RuntimeError(
             f"expected Kickstart, but {detected.identity.project_name!r} is running"
@@ -1352,29 +1355,22 @@ def main() -> None:
     )
 
     print("\n🔹 Phase 2 of 3 — Prepare the feeder for the final ESPHome firmware")
+    hub = {
+        "username": values["kickstart_web_username"],
+        "password": values["kickstart_web_password"],
+        "debug": args.debug,
+    }
     recovery = release / f"petkit-post-kickstart-{int(time.time())}.bin"
     print("  • Saving the 2 MiB recovery image and slot status...")
-    download_recovery(
-        recovery,
-        url=f"http://{kickstart_host}/hub/flash_read",
-        username=values["kickstart_web_username"],
-        password=values["kickstart_web_password"],
-        cwd=project,
-        debug=args.debug,
-    )
+    download_recovery(recovery, url=f"http://{kickstart_host}/hub/flash_read", **hub)
     if recovery.stat().st_size != 0x200000:
         raise RuntimeError("Kickstart recovery download is not 2 MiB")
 
     slot_status = fetch_authenticated_json(
-        f"http://{kickstart_host}/hub/slot_status",
-        username=values["kickstart_web_username"],
-        password=values["kickstart_web_password"],
-        cwd=project,
-        debug=args.debug,
+        f"http://{kickstart_host}/hub/slot_status", **hub
     )
     status_path = recovery.with_name(f"{recovery.stem}-slot-status.json")
-    status_path.write_text(json.dumps(slot_status, indent=2) + "\n", encoding="utf-8")
-    status_path.chmod(0o600)
+    write_private_text(status_path, json.dumps(slot_status, indent=2) + "\n")
     print(f"  ✓ Saved the recovery image and slot status ({status_path.name}).")
 
     if slot_status.get("current_slot") == 1:
@@ -1382,35 +1378,15 @@ def main() -> None:
         post_authenticated(
             f"http://{kickstart_host}/hub/copy_lower_to_upper_slot"
             "?confirm=copy-lower-to-upper-slot",
-            username=values["kickstart_web_username"],
-            password=values["kickstart_web_password"],
-            cwd=project,
-            debug=args.debug,
+            **hub,
         )
-        wait_for_slot(
-            [kickstart_host, args.kickstart_host],
-            2,
-            username=values["kickstart_web_username"],
-            password=values["kickstart_web_password"],
-            cwd=project,
-            debug=args.debug,
-        )
+        wait_for_slot([kickstart_host, args.kickstart_host], 2, **hub)
 
     print("  • Preparing the feeder for the final ESPHome firmware...")
     post_authenticated(
-        f"http://{kickstart_host}/hub/convert?confirm=convert-v2-to-eboot",
-        username=values["kickstart_web_username"],
-        password=values["kickstart_web_password"],
-        cwd=project,
-        debug=args.debug,
+        f"http://{kickstart_host}/hub/convert?confirm=convert-v2-to-eboot", **hub
     )
-    wait_for_conversion(
-        kickstart_host,
-        username=values["kickstart_web_username"],
-        password=values["kickstart_web_password"],
-        cwd=project,
-        debug=args.debug,
-    )
+    wait_for_conversion(kickstart_host, **hub)
 
     print("\n🔹 Phase 3 of 3 — Install the final ESPHome firmware")
     if not confirm_final_install():
@@ -1427,21 +1403,17 @@ def main() -> None:
         )
         return
 
-    print("  • Building the final feeder firmware...")
-    run(
-        [str(esphome), "compile", "petkit-feeder.yaml"],
-        cwd=project / "esphome",
-        env=build_env,
-        debug=args.debug,
-    )
-
-    print("  • Installing the final feeder firmware...")
-    run(
-        [str(esphome), "upload", "petkit-feeder.yaml", "--device", kickstart_host],
-        cwd=project / "esphome",
-        env=build_env,
-        debug=args.debug,
-    )
+    for step, command in (
+        ("Building", ["compile", "petkit-feeder.yaml"]),
+        ("Installing", ["upload", "petkit-feeder.yaml", "--device", kickstart_host]),
+    ):
+        print(f"  • {step} the final feeder firmware...")
+        run(
+            [str(esphome), *command],
+            cwd=project / "esphome",
+            env=build_env,
+            debug=args.debug,
+        )
 
     print("  • Waiting for the authenticated final ESPHome firmware...")
     final = wait_for_firmware(
@@ -1460,8 +1432,8 @@ def main() -> None:
         f"Final ESPHome firmware {final.identity.project_name} is authenticated "
         f"at {final.host} on feeder {final.identity.mac_address}.\n\n"
         "⚠️  Keep the recovery image and slot status:\n"
-        f"{display_path(recovery, project)}\n"
-        f"{display_path(status_path, project)}\n"
+        f"{display_path(recovery)}\n"
+        f"{display_path(status_path)}\n"
     )
 
 

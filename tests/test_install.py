@@ -302,7 +302,6 @@ class RecoveryDownloadTest(unittest.TestCase):
                     url="http://192.0.2.1/hub/flash_read",
                     username="admin",
                     password="secret",
-                    cwd=Path(directory),
                 )
 
             self.assertEqual(path.read_bytes(), b"recovery")
@@ -322,7 +321,6 @@ class RecoveryDownloadTest(unittest.TestCase):
                         url="http://192.0.2.1/hub/flash_read",
                         username="admin",
                         password="secret",
-                        cwd=Path(directory),
                     )
 
             self.assertFalse(path.exists())
@@ -1316,13 +1314,11 @@ class WaitForSlotTest(unittest.TestCase):
             ),
             mock.patch.object(install.time, "sleep"),
         ):
-            install.wait_for_slot("host", 2, username="u", password="p", cwd=Path("."))
+            install.wait_for_slot(["host"], 2, username="u", password="p")
 
     def test_times_out(self) -> None:
         with self.assertRaises(install.InstallationTimeout):
-            install.wait_for_slot(
-                "host", 2, username="u", password="p", cwd=Path("."), timeout=0
-            )
+            install.wait_for_slot(["host"], 2, username="u", password="p", timeout=0)
 
 
 class WaitForConversionTest(unittest.TestCase):
@@ -1333,7 +1329,7 @@ class WaitForConversionTest(unittest.TestCase):
             ),
             mock.patch.object(install.time, "sleep"),
         ):
-            install.wait_for_conversion("host", username="u", password="p", cwd=Path("."))
+            install.wait_for_conversion("host", username="u", password="p")
 
     def test_success(self) -> None:
         self._run([{"result": "success"}])
@@ -1355,9 +1351,7 @@ class WaitForConversionTest(unittest.TestCase):
 
     def test_times_out_while_in_progress(self) -> None:
         with self.assertRaises(install.InstallationTimeout):
-            install.wait_for_conversion(
-                "host", username="u", password="p", cwd=Path("."), timeout=0
-            )
+            install.wait_for_conversion("host", username="u", password="p", timeout=0)
 
 
 if __name__ == "__main__":
