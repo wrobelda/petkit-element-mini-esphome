@@ -1490,12 +1490,6 @@ def main() -> None:
     if not confirm_final_install():
         print(
             "\nFinished after successfully installing Kickstarter.\n\n"
-            "When you take control of the feeder in ESPHome Device Builder, put "
-            "the bridge's API encryption key into the new configuration, at the "
-            "top level, so the install can authenticate with the bridge:\n\n"
-            "  api:\n"
-            "    encryption:\n"
-            f"      key: \"{values['api_key']}\"\n\n"
             "In case you have trouble installing final image via ESPHome Device "
             "Builder, you can still install the feeder firmware manually:\n"
             f"  cd {project}\n"

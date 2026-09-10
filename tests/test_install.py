@@ -1330,10 +1330,10 @@ class MainResumeTest(unittest.TestCase):
             # Only the convert POST; the final firmware is not installed.
             self.assertEqual(upload.call_count, 1)
             wait.assert_not_called()
-            # The adopted configuration must carry the bridge's key for the
-            # first install to authenticate, so the installer prints it.
+            # Adoption needs nothing from the bridge; only the fallback command
+            # is printed, never the bridge's key.
             output = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
-            self.assertIn(self.SECRETS["api_key"], output)
+            self.assertNotIn(self.SECRETS["api_key"], output)
             self.assertIn("petkit-feeder-local.yaml", output)
 
 
