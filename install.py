@@ -194,6 +194,10 @@ def curl_config_line(username: str, password: str) -> str:
     return f'user = "{quote(username)}:{quote(password)}"\n'
 
 
+# curl exit codes for failures that clear up while the bridge reboots.
+TRANSIENT_CURL_EXIT_CODES = frozenset({6, 7, 28, 35, 52, 56})
+
+
 def run_authenticated_curl(
     arguments: list[str],
     *,
@@ -201,8 +205,13 @@ def run_authenticated_curl(
     password: str,
     debug: bool = False,
     capture: bool = False,
+    quiet: bool = False,
 ) -> str:
-    """Run curl with digest credentials passed on stdin; return captured stdout."""
+    """Run curl with digest credentials passed on stdin; return captured stdout.
+
+    With *quiet*, a failure raises without echoing curl's output, for polls
+    whose misses are expected.
+    """
     command = ["curl", "--config", "-", "--digest", "--fail-with-body", *arguments]
     if debug:
         announce_command(command)
@@ -213,7 +222,10 @@ def run_authenticated_curl(
         check=False,
         capture_output=capture or not debug,
     )
-    check_process(result)
+    if quiet:
+        result.check_returncode()
+    else:
+        check_process(result)
     return result.stdout or ""
 
 
@@ -245,14 +257,17 @@ def fetch_authenticated_json(
     username: str,
     password: str,
     debug: bool = False,
+    quiet: bool = False,
 ) -> dict[str, object]:
-    # Polled while the bridge reboots, so bound the connect and transfer time.
+    # Polled while the bridge reboots, so bound the connect and transfer time
+    # and keep curl's progress meter out of the captured output.
     text = run_authenticated_curl(
-        ["--connect-timeout", "5", "--max-time", "30", url],
+        ["--silent", "--show-error", "--connect-timeout", "5", "--max-time", "30", url],
         username=username,
         password=password,
         debug=debug,
         capture=True,
+        quiet=quiet,
     )
     return parse_json_object(text, source=url)
 
@@ -263,13 +278,32 @@ def post_authenticated(
     username: str,
     password: str,
     debug: bool = False,
+    timeout: int = 30,
 ) -> None:
-    run_authenticated_curl(
-        ["--request", "POST", url],
-        username=username,
-        password=password,
-        debug=debug,
-    )
+    """POST to the bridge, retrying resolution and connection failures.
+
+    The bridge's mDNS name can take a few seconds to resolve again after a
+    reboot; failures the bridge itself reports (an HTTP error) are not retried.
+    """
+    last_error: subprocess.CalledProcessError | None = None
+    for _ in poll(timeout):
+        try:
+            run_authenticated_curl(
+                ["--silent", "--show-error", "--connect-timeout", "5", "--request", "POST", url],
+                username=username,
+                password=password,
+                debug=debug,
+                quiet=True,
+            )
+            return
+        except subprocess.CalledProcessError as error:
+            if error.returncode not in TRANSIENT_CURL_EXIT_CODES:
+                report_process_failure(error)
+                raise
+            last_error = error
+    assert last_error is not None
+    report_process_failure(last_error)
+    raise last_error
 
 
 def wait_for_slot(
@@ -280,59 +314,64 @@ def wait_for_slot(
     password: str,
     timeout: int = 300,
     debug: bool = False,
-) -> None:
+) -> str:
     """Wait until /hub/slot_status reports *expected_slot* is active.
 
     The slot routes report the active slot 1-based and 1 is the lower slot, so
     relocation from the lower slot completes when this reports 2. Relocation
-    reboots the bridge, so try each host until one answers.
+    reboots the bridge, so try each host until one answers, and return the
+    host that did.
     """
     for _ in poll(timeout, progress_label=f"the bridge to reach slot {expected_slot}"):
-        for host in hosts:
+        for host in dict.fromkeys(hosts):
             try:
                 status = fetch_authenticated_json(
                     f"http://{host}/hub/slot_status",
                     username=username,
                     password=password,
                     debug=debug,
+                    quiet=True,
                 )
             except (subprocess.CalledProcessError, RuntimeError):
                 continue
             if status.get("current_slot") == expected_slot:
-                return
+                return host
     raise InstallationTimeout(f"the bridge did not reach slot {expected_slot}")
 
 
 def wait_for_conversion(
-    host: str,
+    hosts: list[str],
     *,
     username: str,
     password: str,
     timeout: int = 300,
     debug: bool = False,
-) -> None:
+) -> str:
+    """Wait for the bridge to report the eboot layout; return the host that did."""
     for _ in poll(timeout, progress_label="the bridge to finish preparing"):
-        try:
-            status = fetch_authenticated_json(
-                f"http://{host}/hub/convert",
-                username=username,
-                password=password,
-                debug=debug,
-            )
-        except (subprocess.CalledProcessError, RuntimeError):
-            continue
-        result = str(status.get("result", ""))
-        # already_converted is the layout-is-eboot signal on every boot after
-        # the first; success is the conversion boot itself.
-        if result in ("success", "already_converted"):
-            return
-        # Everything except a still-running conversion is terminal.
-        if result not in ("idle", "in_progress", ""):
-            raise RuntimeError(
-                f"the bridge reported a failed conversion: {result}. "
-                "The recovery image and POST /hub/boot_other are the way "
-                "back to the stock firmware."
-            )
+        for host in dict.fromkeys(hosts):
+            try:
+                status = fetch_authenticated_json(
+                    f"http://{host}/hub/convert",
+                    username=username,
+                    password=password,
+                    debug=debug,
+                    quiet=True,
+                )
+            except (subprocess.CalledProcessError, RuntimeError):
+                continue
+            result = str(status.get("result", ""))
+            # already_converted is the layout-is-eboot signal on every boot
+            # after the first; success is the conversion boot itself.
+            if result in ("success", "already_converted"):
+                return host
+            # Everything except a still-running conversion is terminal.
+            if result not in ("idle", "in_progress", ""):
+                raise RuntimeError(
+                    f"the bridge reported a failed conversion: {result}. "
+                    "The recovery image and POST /hub/boot_other are the way "
+                    "back to the stock firmware."
+                )
     raise InstallationTimeout("the bridge did not report a successful conversion")
 
 
@@ -1430,13 +1469,13 @@ def main() -> None:
             "?confirm=copy-lower-to-upper-slot",
             **hub,
         )
-        wait_for_slot([kickstart_host, args.kickstart_host], 2, **hub)
+        kickstart_host = wait_for_slot([kickstart_host, args.kickstart_host], 2, **hub)
 
     print("  • Preparing the feeder for the final ESPHome firmware...")
     post_authenticated(
         f"http://{kickstart_host}/hub/convert?confirm=convert-v2-to-eboot", **hub
     )
-    wait_for_conversion(kickstart_host, **hub)
+    kickstart_host = wait_for_conversion([kickstart_host, args.kickstart_host], **hub)
 
     print("\n🔹 Phase 3 of 3 — Install the final ESPHome firmware")
     if not confirm_final_install():

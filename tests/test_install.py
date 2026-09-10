@@ -838,7 +838,9 @@ class MainResumeTest(unittest.TestCase):
             mock.patch.object(
                 install, "fetch_authenticated_json", return_value={"current_slot": 2}
             ),
-            mock.patch.object(install, "wait_for_conversion"),
+            mock.patch.object(
+                install, "wait_for_conversion", return_value="petkit-kickstart.local"
+            ),
             mock.patch.object(install, "confirm_final_install", return_value=True),
             mock.patch.object(sys, "argv", ["install.py"]),
         )
@@ -1256,7 +1258,9 @@ class MainResumeTest(unittest.TestCase):
                     )
                 )
                 wait_slot = stack.enter_context(
-                    mock.patch.object(install, "wait_for_slot")
+                    mock.patch.object(
+                        install, "wait_for_slot", return_value="petkit-kickstart.local"
+                    )
                 )
                 stack.enter_context(
                     mock.patch.object(install, "wait_for_conversion")
@@ -1330,6 +1334,35 @@ class ConfirmFinalInstallTest(unittest.TestCase):
             self.assertFalse(install.confirm_final_install())
 
 
+class PostAuthenticatedTest(unittest.TestCase):
+    def test_retries_a_transient_resolution_failure(self) -> None:
+        with (
+            mock.patch.object(
+                install,
+                "run_authenticated_curl",
+                side_effect=[subprocess.CalledProcessError(6, ["curl"]), ""],
+            ) as curl,
+            mock.patch.object(install.time, "sleep"),
+        ):
+            install.post_authenticated("http://host/hub/convert", username="u", password="p")
+
+        self.assertEqual(curl.call_count, 2)
+
+    def test_does_not_retry_a_bridge_error(self) -> None:
+        with (
+            mock.patch.object(
+                install,
+                "run_authenticated_curl",
+                side_effect=subprocess.CalledProcessError(22, ["curl"]),
+            ) as curl,
+            mock.patch.object(install, "report_process_failure"),
+        ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                install.post_authenticated("http://host/hub/convert", username="u", password="p")
+
+        self.assertEqual(curl.call_count, 1)
+
+
 class WaitForSlotTest(unittest.TestCase):
     def test_returns_when_the_slot_is_reached(self) -> None:
         with (
@@ -1340,7 +1373,9 @@ class WaitForSlotTest(unittest.TestCase):
             ),
             mock.patch.object(install.time, "sleep"),
         ):
-            install.wait_for_slot(["host"], 2, username="u", password="p")
+            self.assertEqual(
+                install.wait_for_slot(["host"], 2, username="u", password="p"), "host"
+            )
 
     def test_times_out(self) -> None:
         with self.assertRaises(install.InstallationTimeout):
@@ -1355,7 +1390,7 @@ class WaitForConversionTest(unittest.TestCase):
             ),
             mock.patch.object(install.time, "sleep"),
         ):
-            install.wait_for_conversion("host", username="u", password="p")
+            install.wait_for_conversion(["host"], username="u", password="p")
 
     def test_success(self) -> None:
         self._run([{"result": "success"}])
@@ -1377,7 +1412,7 @@ class WaitForConversionTest(unittest.TestCase):
 
     def test_times_out_while_in_progress(self) -> None:
         with self.assertRaises(install.InstallationTimeout):
-            install.wait_for_conversion("host", username="u", password="p", timeout=0)
+            install.wait_for_conversion(["host"], username="u", password="p", timeout=0)
 
 
 if __name__ == "__main__":
