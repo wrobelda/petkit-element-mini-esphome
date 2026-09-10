@@ -105,7 +105,7 @@ Build the transition and final images:
 cd esphome
 export KICKSTART_COMPONENTS_PATH="$(realpath ../../esphome-kickstart/components)"
 ../.venv/bin/esphome compile petkit-kickstart.yaml
-../.venv/bin/esphome compile petkit-feeder.yaml
+../.venv/bin/esphome compile petkit-feeder-local.yaml
 ```
 
 Package the transition ELF in the V2 format expected by Petkit's stock OTA
@@ -247,19 +247,20 @@ and resolve the failure before retrying.
 Build the final firmware, then install it from the project directory:
 
 ```sh
-.venv/bin/esphome compile esphome/petkit-feeder.yaml
-.venv/bin/esphome upload esphome/petkit-feeder.yaml --device "$KICKSTART_IP"
+.venv/bin/esphome compile esphome/petkit-feeder-local.yaml
+.venv/bin/esphome upload esphome/petkit-feeder-local.yaml --device "$KICKSTART_IP"
 ```
 
 **Take Control in ESPHome Device Builder:** Kickstart advertises the feeder
 configuration, so Device Builder can discover it before or after conversion.
 Take Control only creates a configuration; it does not migrate Kickstart or
-install firmware.
-The current feeder YAML uses a local `components/` directory, so it is not yet
-a self-contained remote package. Use the command above for this checkout.
-Installing through Device Builder requires an import-ready package or a local
-copy of the feeder component, together with the YAML's secrets, including the
-same `api_key` used by Kickstart.
+install firmware. Taking control creates a new API encryption key for the
+feeder and writes it into the new configuration; after the install, Home
+Assistant re-authenticates with that key by itself. The package takes only the
+Wi-Fi credentials from Device Builder's `secrets.yaml`; the fallback access
+point is open unless the configuration sets the `fallback_ap_password`
+substitution, and the clocks use Device Builder's time zone unless it extends
+`hardware_time` and `homeassistant_time` with another one.
 
 Home Assistant should reuse the Kickstart device entry and rename it to Petkit
 Feeder. Future updates use ESPHome OTA.

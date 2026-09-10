@@ -230,14 +230,21 @@ sequence:
 
 ## Home Assistant handoff
 
-Use the **same native API encryption key** in Kickstart and the final feeder
-configuration. Home Assistant retains the encrypted connection settings when
-the firmware changes.
+The feeder does not need the bridge's API encryption key. Home Assistant
+identifies the device by its MAC address, so it keeps one device entry through
+the migration even when the key or the node name changes:
 
-If the final image exposes a plaintext API, Home Assistant cannot connect using
-the retained encrypted settings. Keeping the same key allows Home Assistant to
-reuse the existing device entry. The node and friendly names may change during
-migration.
+- The local build in `petkit-feeder-local.yaml` reuses the bridge's key from
+  this checkout's `secrets.yaml`, so the installer can authenticate the final
+  firmware immediately with the credentials it already holds.
+- Device Builder mints a new key when it takes control of the bridge and writes
+  it into the new configuration. After the install, Home Assistant's
+  re-authentication tries the keys it can find, including the one held by the
+  dashboard, and repairs its stored key without asking.
+
+The final image must keep the API encrypted; the package's OTA platform
+inherits the API key, and configuration validation rejects an adopting YAML
+that provides none.
 
 ## Shared implementation
 

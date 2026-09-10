@@ -19,9 +19,16 @@
 # strap. See the Fresh Element Mini recovery guide in the separate
 # petkit-compat-server repository for the verified sequence.
 
+# This file is the package that Kickstart advertises through dashboard_import.
+# It takes only the Wi-Fi credentials from the adopter's secrets.yaml; every
+# other per-device value is a substitution or is written into the adopting
+# YAML by ESPHome Device Builder. petkit-feeder-local.yaml layers this
+# checkout's secrets on top for the installer and the manual procedure.
 substitutions:
   name: petkit-feeder
   friendly_name: Petkit Feeder
+  # Password of the fallback access point; empty means an open network.
+  fallback_ap_password: ""
 
 globals:
   # Local calendar date of the last run of each schedule slot. Persisting this
@@ -92,15 +99,15 @@ api:
   # Feed will keep working with no network, but expose it to HA when present.
   # Do not reboot this offline-first appliance when Home Assistant is absent.
   reboot_timeout: 0s
-  # Use the same encrypted API identity as the migration bridge so Home
-  # Assistant can reconnect after the final firmware replaces Kickstart.
-  encryption:
-    key: !secret api_key
+  # The encryption key is per device and lives in the adopting YAML: Device
+  # Builder mints one when it takes control of the bridge, and Home Assistant
+  # re-authenticates with it through the dashboard. The local build supplies
+  # the bridge's own key from petkit-feeder-local.yaml.
 
 ota:
   - platform: esphome
     # ESPHome 2026.9 reuses the native API key for encrypted and authenticated
-    # firmware updates, so no second OTA credential is needed.
+    # firmware updates, so the adopting YAML must provide an API key.
     encryption:
 
 wifi:
@@ -130,7 +137,7 @@ wifi:
           - lambda: 'id(feeder).blink_upper(0, 1000, 0xFFFF);'
   ap:
     ssid: "${friendly_name} Fallback"
-    password: !secret fallback_ap_password
+    password: ${fallback_ap_password}
 
 captive_portal:
 
@@ -148,11 +155,11 @@ time:
     id: hardware_time
     i2c_id: rtc_bus
     address: 0x51
-    timezone: !secret timezone
+    # The time zone defaults to the build machine's; override it from the
+    # adopting YAML with `!extend hardware_time` when they differ.
     update_interval: never
   - platform: homeassistant
     id: homeassistant_time
-    timezone: !secret timezone
     on_time_sync:
       then:
         - pcf8563.write_time:

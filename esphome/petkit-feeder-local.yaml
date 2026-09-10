@@ -1,0 +1,19 @@
+# Local build of the feeder firmware for the guided installer and the manual
+# procedure. It layers this checkout's secrets on the published package so the
+# feeder keeps the API key the Kickstart bridge was built with and the time
+# zone chosen at installation.
+substitutions:
+  fallback_ap_password: !secret fallback_ap_password
+
+packages:
+  feeder: !include petkit-feeder.yaml
+
+api:
+  encryption:
+    key: !secret api_key
+
+time:
+  - id: !extend hardware_time
+    timezone: !secret timezone
+  - id: !extend homeassistant_time
+    timezone: !secret timezone
