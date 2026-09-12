@@ -1489,7 +1489,7 @@ def main() -> None:
         print(
             "\nKickstart is ready. Install the feeder firmware through Device Builder.\n\n"
             "Until esphome/device-builder#2691 is fixed, add this to the adopted\n"
-            "configuration in Device Builder first:\n\n"
+            "YAML configuration in Device Builder first:\n\n"
             "api:\n"
             "  encryption:\n"
             f"    key: \"{values['api_key']}\"\n\n"
