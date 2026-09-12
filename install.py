@@ -1488,8 +1488,12 @@ def main() -> None:
     if not confirm_final_install():
         print(
             "\nKickstart is ready. Install the feeder firmware through Device Builder.\n\n"
-            "In case you have trouble installing final image via ESPHome Device "
-            "Builder, you can still install the feeder firmware manually:\n"
+            "Until esphome/device-builder#2691 is fixed, add this to the adopted\n"
+            "configuration in Device Builder first:\n\n"
+            "api:\n"
+            "  encryption:\n"
+            f"    key: \"{values['api_key']}\"\n\n"
+            "To install without Device Builder:\n"
             f"  cd {project}\n"
             f"  .venv/bin/esphome run esphome/petkit-feeder-local.yaml "
             f"--device {kickstart_host}\n"

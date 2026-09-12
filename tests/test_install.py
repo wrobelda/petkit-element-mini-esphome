@@ -1336,10 +1336,11 @@ class MainResumeTest(unittest.TestCase):
             # Only the convert POST; the final firmware is not installed.
             self.assertEqual(upload.call_count, 1)
             wait.assert_not_called()
-            # Adoption needs nothing from the bridge; only the fallback command
-            # is printed, never the bridge's key.
+            # The Device Builder path needs a manual key until the builder mints
+            # one before validation (esphome/device-builder#2691).
             output = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
-            self.assertNotIn(self.SECRETS["api_key"], output)
+            self.assertIn(self.SECRETS["api_key"], output)
+            self.assertIn("esphome/device-builder#2691", output)
             self.assertIn("petkit-feeder-local.yaml", output)
 
 
