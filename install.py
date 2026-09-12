@@ -794,7 +794,7 @@ def read_device_identity(
     api_key: str,
     *,
     timeout: float = 5.0,
-) -> DeviceIdentity | None:
+) -> DetectedFirmware | None:
     env = os.environ.copy()
     env["ESPHOME_API_KEY"] = api_key
     result = subprocess.run(
@@ -818,9 +818,12 @@ def read_device_identity(
         raise RuntimeError(f"could not identify ESPHome firmware at {host}: {detail}")
     try:
         data = parse_json_object(result.stdout, source=host)
-        return DeviceIdentity(
-            mac_address=str(data["mac_address"]),
-            project_name=str(data["project_name"]),
+        return DetectedFirmware(
+            host=str(data["connected_address"]),
+            identity=DeviceIdentity(
+                mac_address=str(data["mac_address"]),
+                project_name=str(data["project_name"]),
+            ),
         )
     except (KeyError, RuntimeError) as error:
         raise RuntimeError(f"invalid ESPHome identity returned for {host}") from error
@@ -853,18 +856,6 @@ def save_expected_mac(path: Path, mac_address: str) -> None:
     path.chmod(0o600)
 
 
-def resolve_host(host: str) -> str:
-    """Return *host*'s IPv4 address, or *host* itself when it does not resolve.
-
-    The bridge is addressed by IP for the rest of the run so that a slow
-    mDNS lookup after one of its reboots cannot stall or fail a request.
-    """
-    try:
-        return socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)[0][4][0]
-    except (OSError, IndexError):
-        return host
-
-
 def detect_running_firmware(
     python: Path,
     project: Path,
@@ -875,12 +866,13 @@ def detect_running_firmware(
     errors: list[str] = []
     for host in dict.fromkeys(hosts):
         try:
-            identity = read_device_identity(python, project, host, api_key)
+            detected = read_device_identity(python, project, host, api_key)
         except RuntimeError as error:
             errors.append(str(error))
             continue
-        if identity is None:
+        if detected is None:
             continue
+        identity = detected.identity
         if identity.project_name not in {KICKSTART_PROJECT, FINAL_PROJECT}:
             errors.append(
                 f"{host} runs unexpected ESPHome project {identity.project_name!r}"
@@ -891,7 +883,7 @@ def detect_running_firmware(
             raise DeviceMismatchError(
                 f"{host} is {identity.mac_address}, not the expected feeder MAC"
             )
-        return DetectedFirmware(host=resolve_host(host), identity=identity)
+        return detected
     if errors:
         raise RuntimeError("; ".join(errors))
     return None

@@ -400,18 +400,22 @@ class DeviceIdentityTest(unittest.TestCase):
             [],
             0,
             stdout=(
-                '{"mac_address":"E8:68:E7:00:00:01",'
+                '{"connected_address":"192.0.2.10",'
+                '"mac_address":"E8:68:E7:00:00:01",'
                 '"project_name":"petkit.fresh-element-mini"}'
             ),
             stderr="",
         )
         with mock.patch.object(install.subprocess, "run", return_value=result) as run:
-            identity = install.read_device_identity(
+            detected = install.read_device_identity(
                 Path("python"), Path("/project"), "192.0.2.10", "private-api-key"
             )
 
-        assert identity is not None
-        self.assertEqual(identity.project_name, "petkit.fresh-element-mini")
+        assert detected is not None
+        self.assertEqual(detected.host, "192.0.2.10")
+        self.assertEqual(
+            detected.identity.project_name, "petkit.fresh-element-mini"
+        )
         command = run.call_args.args[0]
         self.assertNotIn("private-api-key", command)
         self.assertEqual(
@@ -451,7 +455,10 @@ class FirmwarePhaseTest(unittest.TestCase):
 
     def test_detects_final_project_by_authenticated_identity(self) -> None:
         final = self.identity(install.FINAL_PROJECT)
-        with mock.patch.object(install, "read_device_identity", return_value=final):
+        answering = install.DetectedFirmware("192.0.2.10", final)
+        with mock.patch.object(
+            install, "read_device_identity", return_value=answering
+        ):
             detected = install.detect_running_firmware(
                 Path("python"), Path("/project"), ["192.0.2.10"], "key", None
             )
@@ -459,11 +466,11 @@ class FirmwarePhaseTest(unittest.TestCase):
         assert detected is not None
         self.assertEqual(detected.identity.project_name, install.FINAL_PROJECT)
 
-    def test_reports_the_resolved_address_of_the_answering_host(self) -> None:
+    def test_reports_the_address_used_by_the_authenticated_connection(self) -> None:
         final = self.identity(install.FINAL_PROJECT)
-        with (
-            mock.patch.object(install, "read_device_identity", return_value=final),
-            mock.patch.object(install, "resolve_host", return_value="192.0.2.10"),
+        answering = install.DetectedFirmware("192.0.2.10", final)
+        with mock.patch.object(
+            install, "read_device_identity", return_value=answering
         ):
             detected = install.detect_running_firmware(
                 Path("python"), Path("/project"), ["petkit-kickstart.local"], "key", None
@@ -472,13 +479,12 @@ class FirmwarePhaseTest(unittest.TestCase):
         assert detected is not None
         self.assertEqual(detected.host, "192.0.2.10")
 
-    def test_resolve_host_keeps_an_unresolvable_name(self) -> None:
-        with mock.patch.object(install.socket, "getaddrinfo", side_effect=OSError):
-            self.assertEqual(install.resolve_host("nowhere.invalid"), "nowhere.invalid")
-
     def test_rejects_a_different_physical_device(self) -> None:
         final = self.identity(install.FINAL_PROJECT, "E8:68:E7:00:00:02")
-        with mock.patch.object(install, "read_device_identity", return_value=final):
+        answering = install.DetectedFirmware("192.0.2.10", final)
+        with mock.patch.object(
+            install, "read_device_identity", return_value=answering
+        ):
             with self.assertRaises(install.DeviceMismatchError):
                 install.detect_running_firmware(
                     Path("python"),

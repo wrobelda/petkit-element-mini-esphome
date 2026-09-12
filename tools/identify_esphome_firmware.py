@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Return authenticated ESPHome device identity as JSON."""
+"""Return authenticated ESPHome identity and peer address as JSON."""
 
 from __future__ import annotations
 
@@ -36,7 +36,10 @@ async def read_identity(host: str, timeout: float) -> dict[str, str]:
     try:
         await asyncio.wait_for(client.connect(login=True), timeout=timeout)
         info = await asyncio.wait_for(client.device_info(), timeout=timeout)
+        if not client.connected_address:
+            raise RuntimeError("ESPHome API did not report its connected address")
         return {
+            "connected_address": client.connected_address,
             "mac_address": info.mac_address,
             "project_name": info.project_name,
         }
