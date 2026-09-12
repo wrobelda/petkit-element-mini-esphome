@@ -112,16 +112,14 @@ copied itself there, both slots contain the bridge.
 The authenticated `/hub/convert` request records the conversion request and
 reboots Kickstart. On the next boot, before Wi-Fi starts, Kickstart rebuilds
 its own application as an eboot V1 image and replaces the vendor bootloader
-with eboot last. Writing the bootloader last postpones the
-change in boot layout until the application has been written; it does not make
-the operation immune to power loss, and interruption during bootloader
-replacement can still require UART recovery. The generic validation rules,
-write order, and power-loss limits are documented in the [ESPHome Kickstart
-non-OS V2 transition guide][transition-guide].
+with eboot last. This preserves the vendor bootloader until the application
+has been written, but power loss during bootloader replacement can still
+require UART recovery. The [generic transition guide][transition-guide]
+documents validation, write order, and recovery limits.
 
 Read `GET /hub/convert` after the reboot to confirm that Kickstart recognized
 the eboot layout. Installing the feeder firmware afterward is a separate step:
-take control of the feeder in ESPHome Device Builder, or build and upload it
+select **Take Control** in ESPHome Device Builder, or build and upload it
 from the command line. Conversion alone does not install feeder controls.
 
 Manual installation and the current Device Builder requirements are described
@@ -230,25 +228,38 @@ sequence:
 
 ## Home Assistant handoff
 
-The feeder does not need the bridge's API encryption key. Home Assistant
-identifies the device by its MAC address, so it keeps one device entry through
-the migration even when the key or the node name changes:
+Home Assistant identifies the feeder by its MAC address. The API encryption
+key controls access to that device and depends on how the final firmware is built:
 
-- The local build in `petkit-feeder-local.yaml` reuses the bridge's key from
-  this checkout's `secrets.yaml`, so the installer can authenticate the final
-  firmware immediately with the credentials it already holds.
-- Device Builder generates a key when it takes control of the bridge and
-  writes it into the new configuration. After the install, Home Assistant's
-  re-authentication tries the keys it can find, including the one held by the
-  dashboard, and repairs its stored key without asking.
+| Installation | API encryption key | Time zone |
+|---|---|---|
+| Local, using `petkit-feeder-local.yaml` | Reuses `api_key` from this checkout's `secrets.yaml` | Uses `timezone` from the same file |
+| Device Builder | Generates a key when you select **Take Control** | Uses Device Builder's time zone |
 
-Firmware updates are a separate credential. The bridge's OTA is
-unauthenticated, because Device Builder installs the feeder with the OTA
-settings of the configuration it uploads and ESPHome refuses a plaintext
-upload when that configuration carries an OTA encryption key; the bridge
-lives only until that install. The feeder package therefore uses an OTA
-password, empty by default, that an adopting configuration can set through
-the `ota_password` substitution.
+Home Assistant can retrieve the new key from an available Device Builder
+integration during re-authentication. If that lookup is unavailable or fails,
+provide the key from the final configuration when prompted.
+
+To override Device Builder's time zone, extend both `hardware_time` and
+`homeassistant_time` in the Device Builder configuration. The local configuration provides an
+[example](petkit-feeder-local.yaml).
+
+### Firmware-update credentials
+
+The Petkit bridge accepts unauthenticated OTA after conversion so Device Builder
+can perform the first installation without sharing the bridge's API key.
+Before conversion, its OTA listener is disabled.
+
+The feeder package uses a separate `ota_password` substitution, empty by
+default. Set it in the Device Builder configuration to protect later updates.
+`fallback_ap_password` independently protects the fallback Wi-Fi network and
+also defaults to empty in the package; local builds take that password from
+`secrets.yaml`.
+
+The first upload uses password-based OTA rather than OTA encryption: ESPHome
+refuses an unencrypted connection when the uploading configuration requires
+OTA encryption. Native API encryption is separate and remains enabled in both
+installation paths.
 
 ## Shared implementation
 

@@ -28,7 +28,8 @@ if you need to restore it.
 
 ### Guided installation
 
-The guided installer handles the migration up to the final ESPHome firmware:
+The guided installer prepares the feeder for ESPHome, then lets you choose
+where to manage its final firmware:
 
 1. Download the supporting projects and prepare the build environment.
 2. Ask for Wi-Fi and recovery credentials, then build the temporary bridge
@@ -36,17 +37,17 @@ The guided installer handles the migration up to the final ESPHome firmware:
 3. Run the local Petkit API and provision the feeder to download the bridge.
 4. Save a recovery image and slot status, then prepare the feeder for the final
    ESPHome firmware.
-5. Recommend taking control of the feeder in ESPHome Device Builder, or, if
-   you prefer, build and install the final firmware from the installer and
-   confirm that it is running on the same physical device.
+5. Hand over to ESPHome Device Builder, or build and install the final firmware
+   locally and confirm that it is running on the same device.
 
 The installer pauses when you need to put the feeder in setup mode or reconnect
-the computer to your regular 2.4 GHz Wi-Fi network. After preparing the feeder,
-it recommends taking control of it in ESPHome Device Builder and only builds and
-installs the final firmware if you ask it to. If the process is interrupted after the bridge
-or the final firmware boots, run the same command again. The installer
-identifies the running firmware and continues from that phase without repeating
-stock provisioning or a completed migration.
+the computer to your regular 2.4 GHz Wi-Fi network. At the final prompt, choose
+Device Builder for ongoing management through Home Assistant, or a local
+installation to finish from the terminal.
+
+If installation is interrupted after Kickstart or the final firmware boots,
+run the same command again. The installer identifies the running firmware and
+continues without repeating stock provisioning or a completed migration.
 
 ```sh
 git clone https://github.com/wrobelda/petkit-element-mini-esphome.git
@@ -251,20 +252,30 @@ Build the final firmware, then install it from the project directory:
 .venv/bin/esphome upload esphome/petkit-feeder-local.yaml --device "$KICKSTART_IP"
 ```
 
-**Take Control in ESPHome Device Builder:** Kickstart advertises the feeder
-configuration, so Device Builder can discover it before or after conversion.
-Take Control only creates a configuration; it does not migrate Kickstart or
-install firmware. Taking control generates an API encryption key for the
-feeder; after the install, Home Assistant re-authenticates with that key by
-itself. The package takes only the Wi-Fi credentials from Device Builder's
-`secrets.yaml`. Firmware updates and the fallback access point are
-unauthenticated unless the configuration sets the `ota_password` and
-`fallback_ap_password` substitutions, and the clocks use Device Builder's
-time zone unless it extends `hardware_time` and `homeassistant_time` with
-another one.
+#### Use ESPHome Device Builder instead
 
-Home Assistant should reuse the Kickstart device entry and rename it to Petkit
-Feeder. Future updates use ESPHome OTA.
+After conversion, you can install and manage the feeder through Device Builder
+instead of the command line:
+
+1. Check that Device Builder's `secrets.yaml` contains `wifi_ssid` and
+   `wifi_password` for the feeder's network.
+2. Choose passwords for later firmware updates and the fallback Wi-Fi network
+   if you want to protect them. You will add these to the new configuration
+   after taking control.
+3. Find Kickstart under **Discovered** and select **Take Control**. This creates
+   the feeder configuration and an API encryption key; it does not install
+   firmware yet.
+4. Edit the new configuration and set the `ota_password` and
+   `fallback_ap_password` substitutions to your chosen passwords. Both default
+   to empty.
+5. Select **Install** and choose a network installation.
+
+The feeder uses Device Builder's time zone by default. For a different zone
+or details of the API-key change, see [Home Assistant handoff](esphome/KICKSTART.md#home-assistant-handoff).
+
+Home Assistant identifies the feeder by its MAC address, so it can retain the
+existing device entry. If Home Assistant requests an encryption key, use the
+key in the final configuration. Future updates use ESPHome OTA.
 
 The image format, slot behavior, validation, and recovery controls are
 explained in the [Kickstart transition guide](esphome/KICKSTART.md).
