@@ -388,10 +388,10 @@ def prompt(label: str, default: str | None = None, *, secret: bool = False) -> s
 
 def confirm_final_install() -> bool:
     print(
-        "\n✅ Kickstarter is installed.\n\n"
-        "The recommended next step is to take control of the device in ESPHome "
-        "Device Builder: it lists the bridge under Discovered, compiles the "
-        "feeder configuration there, and installs it over the network.\n"
+        "\n✅ Kickstart is ready for the feeder firmware.\n\n"
+        "To manage the feeder in ESPHome Device Builder, find it under "
+        "Discovered, select Take Control, then Install.\n"
+        "Or finish the installation from this terminal below.\n"
     )
     return prompt(
         "    Compile and install the feeder firmware from this installer instead",
@@ -1481,7 +1481,7 @@ def main() -> None:
     print("\n🔹 Phase 3 of 3 — Install the final ESPHome firmware")
     if not confirm_final_install():
         print(
-            "\nFinished after successfully installing Kickstarter.\n\n"
+            "\nKickstart is ready. Install the feeder firmware through Device Builder.\n\n"
             "In case you have trouble installing final image via ESPHome Device "
             "Builder, you can still install the feeder firmware manually:\n"
             f"  cd {project}\n"
