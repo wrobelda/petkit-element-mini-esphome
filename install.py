@@ -62,7 +62,7 @@ COMPAT_SERVER_PORT = 8080
 ESPHOME_VERSION = "2026.9.0b1"
 KICKSTART_IMAGE_NAME = "petkit-element-mini-kickstart-v2.bin"
 KICKSTART_ELF = Path(
-    "esphome/.esphome/build/petkit-kickstart/.pioenvs/petkit-kickstart/firmware.elf"
+    "esphome/.esphome/build/petkit-feeder/.pioenvs/petkit-feeder/firmware.elf"
 )
 # Flash mapping of the Petkit non-OS V2 slots; keep in step with
 # esphome/petkit-kickstart.yaml.

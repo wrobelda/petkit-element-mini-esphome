@@ -4,8 +4,8 @@
 # GPIO13 (manual feed), or GPIO15 (active-low motor-controller reset).
 
 substitutions:
-  name: petkit-kickstart
-  friendly_name: Petkit Kickstart
+  name: petkit-feeder
+  friendly_name: Petkit Feeder
 
 esphome:
   name: ${name}
