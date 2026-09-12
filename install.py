@@ -29,7 +29,7 @@ REPOSITORIES = {
     "esphome-kickstart": "https://github.com/wrobelda/esphome-kickstart.git",
 }
 REPOSITORY_REVISIONS = {
-    "petkit-compat-server": "91bf4d57e1dceecc48eccde936d1532e3fd5e972",
+    "petkit-compat-server": "a4227124dbfa98a885544bc1e2ac34e149ced03d",
     "esphome-kickstart": "98c070e23fdfd9c05de8cce4376cdc31a220e80d",
 }
 ALLOWED_REPOSITORY_ORIGINS = {
