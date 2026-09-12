@@ -1488,8 +1488,9 @@ def main() -> None:
     if not confirm_final_install():
         print(
             "\nKickstart is ready. Install the feeder firmware through Device Builder.\n\n"
-            "Until esphome/device-builder#2691 is fixed, add this to the adopted\n"
-            "YAML configuration in Device Builder first:\n\n"
+            "Until this device-builder issue is fixed, add the block below to the\n"
+            "adopted YAML configuration in Device Builder first:\n"
+            "https://github.com/esphome/device-builder/issues/2691\n\n"
             "api:\n"
             "  encryption:\n"
             f"    key: \"{values['api_key']}\"\n\n"

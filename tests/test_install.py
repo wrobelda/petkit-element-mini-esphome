@@ -1340,7 +1340,7 @@ class MainResumeTest(unittest.TestCase):
             # one before validation (esphome/device-builder#2691).
             output = "\n".join(str(call.args[0]) for call in printed.call_args_list if call.args)
             self.assertIn(self.SECRETS["api_key"], output)
-            self.assertIn("esphome/device-builder#2691", output)
+            self.assertIn("https://github.com/esphome/device-builder/issues/2691", output)
             self.assertIn("petkit-feeder-local.yaml", output)
 
 
