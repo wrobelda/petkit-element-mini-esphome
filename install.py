@@ -763,14 +763,17 @@ def connect_to_petkit_setup_network(*, debug: bool = False) -> None:
             )
         selected_softap = choose_wifi_network(softaps)
         print(
-            f"  → Connect this computer to {selected_softap!r}. The installer "
-            "will continue automatically."
+            f"  → Connect this computer to {selected_softap!r} (or press Enter "
+            "to continue)."
         )
     except (WifiDetectionUnavailable, TimeoutError) as error:
         manual_wifi_fallback(error, manual_instruction)
         return
     wait_for_wifi_network_or_manual(
-        selected_softap, manual_instruction=manual_instruction, debug=debug
+        selected_softap,
+        manual_instruction=manual_instruction,
+        debug=debug,
+        allow_enter=True,
     )
 
 
