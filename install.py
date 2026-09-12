@@ -1464,7 +1464,10 @@ def main() -> None:
     )
     status_path = recovery.with_name(f"{recovery.stem}-slot-status.json")
     write_private_text(status_path, json.dumps(slot_status, indent=2) + "\n")
-    print(f"  ✓ Saved the recovery image and slot status ({status_path.name}).")
+    print(
+        f"  ✓ Saved the recovery image and slot status "
+        f"({recovery.name}, {status_path.name})."
+    )
 
     if slot_status.get("current_slot") == 1:
         print("  • Relocating Kickstart to the upper slot...")
