@@ -27,8 +27,6 @@ substitutions:
   friendly_name: Petkit Feeder
   # Password of the fallback access point; empty means an open network.
   fallback_ap_password: ""
-  # Password for later firmware updates; empty leaves updates unauthenticated.
-  ota_password: ""
 
 globals:
   # Local calendar date of the last run of each schedule slot. Persisting this
@@ -104,10 +102,9 @@ api:
 
 ota:
   - platform: esphome
-    # Not `encryption:`: the first install goes to the Kickstart bridge, whose
-    # OTA is unauthenticated, and ESPHome refuses a plaintext upload when the
-    # uploaded configuration carries an OTA encryption key.
-    password: ${ota_password}
+    # Share the native API encryption key: a bare `encryption:` inherits the
+    # `api: encryption: key:` provided by the including configuration.
+    encryption:
 
 wifi:
   ssid: !secret wifi_ssid

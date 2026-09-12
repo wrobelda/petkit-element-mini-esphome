@@ -69,14 +69,13 @@ api:
     key: !secret api_key
 
 # The OTA listener is suppressed while the V2 layout is active (ota_id below)
-# and starts normally once the bridge has converted to eboot. It is left
-# unauthenticated on purpose: ESPHome Device Builder installs the feeder
-# firmware with the OTA settings of the configuration it uploads, so any OTA
-# credential here would have to be known to that configuration first. The
-# bridge lives only until that install.
+# and starts normally once the bridge has converted to eboot. Uploads use the
+# native API encryption key, so the installer or Device Builder can install the
+# final firmware without a separate OTA credential.
 ota:
   - platform: esphome
     id: native_ota
+    encryption:
 
 esp8266_nonos_v2_to_eboot_v1:
   id: migration
