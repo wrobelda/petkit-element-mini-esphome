@@ -1472,7 +1472,7 @@ def main() -> None:
         )
         kickstart_host = wait_for_slot([kickstart_host, args.kickstart_host], 2, **hub)
 
-    print("  • Preparing the feeder for the final ESPHome firmware...")
+    print("  • Converting the feeder's flash layout from non-OS V2 to ESPHome's eboot V1...")
     post_authenticated(
         f"http://{kickstart_host}/hub/convert?confirm=convert-v2-to-eboot", **hub
     )
